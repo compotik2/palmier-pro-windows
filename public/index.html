@@ -1,26 +1,79 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Palmier Pro Windows Port</title>
-<style>body{font-family:Segoe UI,Arial;margin:0;background:#111;color:#eee}header{padding:12px 16px;background:#1c1c1c;border-bottom:1px solid #333}main{padding:16px;max-width:900px}button{background:#2d6cdf;border:0;color:#fff;padding:8px 12px;border-radius:6px;cursor:pointer}pre{background:#1c1c1c;padding:12px;border-radius:8px;overflow:auto}.row{display:flex;gap:8px;margin:8px 0}</style>
+<title>Palmier Pro — Windows Port</title>
+<style>
+body{font-family:'Segoe UI',Arial;margin:0;background:#141414;color:#eee}
+header{display:flex;gap:16px;align-items:center;padding:10px 16px;background:#1c1c1c;border-bottom:1px solid #333}
+header b{font-size:15px}header span{color:#888;font-size:12px}
+main{display:grid;grid-template-columns:220px 1fr 260px;gap:12px;padding:12px;height:calc(100vh - 48px);box-sizing:border-box}
+.panel{background:#1c1c1c;border:1px solid #333;border-radius:8px;padding:10px;overflow:auto}
+.panel h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;color:#999}
+button{background:#2d6cdf;border:0;color:#fff;padding:6px 10px;border-radius:6px;cursor:pointer;font-size:12px;margin:2px}
+button.ghost{background:#333}
+input,select{background:#111;border:1px solid #444;color:#eee;border-radius:6px;padding:6px;width:100%;box-sizing:border-box;margin:2px 0}
+.track{border:1px solid #333;border-radius:6px;margin-bottom:8px;padding:6px;background:#181818}
+.track .thead{font-size:12px;color:#aaa;margin-bottom:4px}
+.clip{display:inline-block;background:#2d6cdf;border-radius:4px;padding:4px 8px;margin:2px;font-size:11px;cursor:pointer}
+.clip.text{background:#6c4fd8}.clip.caption{background:#1f9d66}
+.clip.sel{outline:2px solid #ffcf40}
+.marker{display:inline-block;background:#8a6d00;border-radius:4px;padding:2px 6px;margin:2px;font-size:11px}
+#preview{width:100%;border-radius:6px;background:#000}
+pre{font-size:11px;white-space:pre-wrap}
+.row{display:flex;gap:4px;flex-wrap:wrap;margin:6px 0}
+</style>
 </head>
 <body>
-<header><b>Palmier Pro — Windows Port</b> <span style="color:#888">MCP: http://127.0.0.1:19789/mcp</span></header>
+<header><b>Palmier Pro — Windows Port</b><span>MCP http://127.0.0.1:19789/mcp · frames [start,end)</span><span id="proj"></span></header>
 <main>
-<div class="row"><button onclick="api('get_timeline',{})">get_timeline</button><button onclick="api('manage_tracks',{action:'add',trackType:'video'})">+ track</button><button onclick="demo()">demo clip</button><button onclick="api('undo',{})">undo</button></div>
-<pre id="out">ready</pre>
-<script>
-async function api(tool, args){
-  const r = await fetch('/mcp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tool,arguments:args})});
-  document.getElementById('out').textContent = JSON.stringify(await r.json(),null,2);
-}
-async function demo(){
-  await api('manage_tracks',{action:'add',trackType:'video'});
-  const t = await (await fetch('/mcp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tool:'get_timeline',arguments:{}})}})).json();
-  const trackId = t.result.tracks[0]?.trackId;
-  await api('add_clips',{trackId,clips:[{start:0,end:90,mediaRef:'demo'}]});
-}
-</script>
+<div class="panel"><h3>Media</h3>
+<div class="row"><button onclick="importDemo()">+ demo media</button><button onclick="refresh()">refresh</button></div>
+<div id="media"></div>
+<h3>Markers</h3><div id="markers"></div>
+<div class="row"><input id="mkrName" placeholder="marker name"><button onclick="addMarker()">+ marker @0</button></div>
+<h3>Export</h3><div class="row"><button onclick="doExport()">export mp4</button></div><div id="exports"></div>
+</div>
+<div class="panel"><h3>Timeline</h3>
+<div class="row"><button onclick="addTrack('video')">+ video track</button><button onclick="addTrack('audio')">+ audio track</button><button onclick="addClip()">+ clip</button><button onclick="addText()">+ text</button><button class="ghost" onclick="doUndo()">undo</button></div>
+<div id="timeline"></div>
+<h3>Inspector</h3><div id="insp"><span style="color:#777">click a clip</span></div>
+</div>
+<div class="panel"><h3>Preview</h3><img id="preview" alt="frame">
+<div class="row"><button onclick="inspect(0)">frame 0</button><button onclick="inspect(60)">frame 60</button></div>
+<h3>Log</h3><pre id="out">ready</pre></div>
 </main>
+<script>
+let TL=null, SEL=null;
+async function api(tool,args){
+  const r=await fetch('/mcp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tool,arguments:args||{}})});
+  const j=await r.json(); document.getElementById('out').textContent=tool+': '+JSON.stringify(j.result||j.error).slice(0,800);
+  return j;
+}
+async function refresh(){
+  const t=await api('get_timeline',{}); TL=t.result;
+  document.getElementById('proj').textContent='· '+TL.totalFrames+'f @'+TL.fps;
+  document.getElementById('timeline').innerHTML=TL.tracks.map(tr=>
+    `<div class="track"><div class="thead">${tr.name||tr.trackId} · ${tr.type} · ${tr.totalClips} clips</div>`+
+    tr.clips.map(c=>`<span class="clip ${c.mediaType||''} ${SEL===c.id?'sel':''}" onclick="sel('${c.id}')">${(c.text||c.mediaRef||c.id).slice(0,14)} [${c.start}-${c.end})</span>`).join('')+`</div>`).join('')||'<span style="color:#777">empty — add a track</span>';
+  const m=await api('manage_markers',{}); document.getElementById('markers').innerHTML=(m.result.markers||[]).map(x=>`<span class="marker">◆ ${x.name}@${x.frame}</span>`).join('');
+  const md=await api('get_media',{}); document.getElementById('media').innerHTML=(md.result.media||[]).map(x=>`<div style="font-size:12px">▪ ${x.name} <span style="color:#777">${x.mediaRef}</span></div>`).join('');
+  const ex=await api('manage_exports',{}); document.getElementById('exports').innerHTML=(ex.result.exports||[]).slice(-4).map(x=>`<div style="font-size:12px">${x.jobId.slice(0,18)}… ${x.status}</div>`).join('');
+}
+function sel(id){SEL=id;refresh().then(()=>showClip(id));}
+async function showClip(id){for(const tr of TL.tracks){const c=tr.clips.find(c=>c.id===id);if(c){document.getElementById('insp').innerHTML=`<div style="font-size:12px">${c.id}<br>[${c.start},${c.end}) spd=${c.speed||1} vol=${c.volumeDb||0}db op=${c.opacity??1}<br>color=${JSON.stringify(c.color||null)}<br>fx=${JSON.stringify(c.effects||[])}<br>kf=${JSON.stringify(c.keyframes||{})}</div><div class="row"><button onclick="splitSel()">split @mid</button><button onclick="delSel()">delete</button><button onclick="gradeSel()">grade teal</button></div>`;break;}}}
+async function addTrack(t){await api('manage_tracks',{action:'add',trackType:t});refresh();}
+async function addClip(){if(!TL.tracks[0])await addTrack('video');await refresh();await api('add_clips',{trackId:TL.tracks[0].trackId,clips:[{start:TL.totalFrames,end:TL.totalFrames+90,mediaRef:'demo'}]});refresh();}
+async function addText(){if(!TL.tracks[0])await addTrack('video');await refresh();await api('add_texts',{trackId:TL.tracks[0].trackId,texts:[{text:'Title',start:0,end:60}]});refresh();}
+async function splitSel(){const c=findSel();if(c){await api('split_clips',{splits:[{clipId:SEL,frame:Math.floor((c.start+c.end)/2)}]});refresh();}}
+async function delSel(){await api('remove_clips',{clipIds:[SEL]});SEL=null;refresh();}
+async function gradeSel(){await api('apply_color',{clipIds:[SEL],color:{lut:'teal_orange',intensity:0.7}});showClip(SEL);refresh();}
+function findSel(){for(const tr of TL.tracks){const c=tr.clips.find(c=>c.id===SEL);if(c)return c;}return null;}
+async function addMarker(){await api('manage_markers',{action:'add',frame:0,name:document.getElementById('mkrName').value||'Marker'});refresh();}
+async function importDemo(){await api('import_media',{name:'demo-'+Date.now().toString(36),source:{matte:{color:'#2244aa'}}});refresh();}
+async function doExport(){await api('export_project',{});setTimeout(refresh,9000);}
+async function doUndo(){await api('undo',{});refresh();}
+async function inspect(f){api('inspect_timeline',{startFrame:f}).then(j=>{const b=j.result.imageBase64;if(b)document.getElementById('preview').src='data:image/png;base64,'+b;});}
+refresh();
+</script>
 </body>
 </html>

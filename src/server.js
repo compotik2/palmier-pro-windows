@@ -5,7 +5,11 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
+function awaitExec(bin, fargs) {
+  try { execFileSync(bin, fargs, { stdio: 'ignore', timeout: 60000 }); return true; }
+  catch { return false; }
+}
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 19789;
 const DATA_DIR = path.join(__dirname, '..', 'data');
@@ -41,8 +45,11 @@ function defaultProject(name) {
     width: 1920,
     height: 1080,
     activeTimelineId: tlId,
-    timelines: [{ id: tlId, name: 'Timeline 1', fps: 30, width: 1920, height: 1080, tracks: [], markers: [] }],
+    timelines: [{ id: tlId, name: 'Timeline 1', fps: 30, width: 1920, height: 1080, tracks: [], markers: [], multicam: [] }],
     media: [],
+    mediaFolders: [{ id: 'root', name: 'Library', parent: null }],
+    transcripts: {},
+    skills: [],
     exports: [],
     undoStack: []
   };
@@ -66,8 +73,15 @@ function activeTimeline(proj) {
   return proj.timelines.find(t => t.id === proj.activeTimelineId) || proj.timelines[0];
 }
 function snapshot(proj) {
-  proj.undoStack.push(JSON.stringify({ timelines: proj.timelines, media: proj.media, activeTimelineId: proj.activeTimelineId }));
+  proj.undoStack.push(JSON.stringify({ timelines: proj.timelines, media: proj.media, mediaFolders: proj.mediaFolders || [], transcripts: proj.transcripts || {}, skills: proj.skills || [], activeTimelineId: proj.activeTimelineId }));
   if (proj.undoStack.length > 50) proj.undoStack.shift();
+}
+function findClip(tl, clipId) {
+  for (const tr of tl.tracks) {
+    const c = tr.clips.find(c => c.id === clipId);
+    if (c) return { track: tr, clip: c };
+  }
+  return null;
 }
 function timelineStats(tl, fps) {
   let totalFrames = 0;
@@ -132,7 +146,7 @@ function callTool(proj, tool, args) {
         const dur = clips.reduce((m, c) => Math.max(m, c.end - c.start), 0);
         for (const c of tr.clips) if (c.start >= at) { c.start += dur; c.end += dur; }
       }
-      tr.clips.push(...clips.map(c => ({ id: c.id, mediaRef: c.mediaRef, start: c.start, end: c.end, speed: c.speed, volumeDb: c.volumeDb, opacity: c.opacity, text: c.text })));
+      tr.clips.push(...clips.map(c => ({ id: c.id, mediaRef: c.mediaRef, start: c.start, end: c.end, speed: c.speed, volumeDb: c.volumeDb, opacity: c.opacity, text: c.text, transform: c.transform, crop: c.crop, color: c.color, effects: c.effects, keyframes: c.keyframes, linkedIds: c.linkedIds || [] })));
       saveProject(proj);
       return { added: clips.map(c => c.id), trackId: tr.id };
     }
@@ -167,12 +181,286 @@ function callTool(proj, tool, args) {
       }
       saveProject(proj); return { splits: out };
     }
-    case 'undo': { const s = proj.undoStack.pop(); if (!s) return { noop: true }; const st = JSON.parse(s); proj.timelines = st.timelines; proj.media = st.media; proj.activeTimelineId = st.activeTimelineId; saveProject(proj); return { undone: true }; }
+    case 'ripple_delete_ranges': {
+      snapshot(proj);
+      for (const tr of tl.tracks) {
+        for (const r of (args.ranges || [])) {
+          const rs = r.startFrame ?? r.start ?? 0, re = r.endFrame ?? r.end ?? 0;
+          const dur = re - rs;
+          if (!(dur > 0)) continue;
+          tr.clips = tr.clips.filter(c => !(c.start >= rs && c.end <= re));
+          for (const c of tr.clips) {
+            if (c.start < rs && c.end > re) c.end -= dur;
+            else if (c.start < rs && c.end > rs && c.end <= re) c.end = rs;
+            else if (c.start >= rs && c.start < re && c.end > re) { c.start = rs; c.end -= dur; }
+            else if (c.start >= re) { c.start -= dur; c.end -= dur; }
+          }
+        }
+      }
+      saveProject(proj); return { ok: true };
+    }
+    case 'swap_clip_media': {
+      snapshot(proj);
+      const swapped = [];
+      for (const s of (args.swaps || [])) {
+        const f = findClip(tl, s.clipId);
+        if (f) { f.clip.mediaRef = s.mediaRef; swapped.push(s.clipId); }
+      }
+      saveProject(proj); return { swapped };
+    }
+    case 'set_clip_properties': {
+      snapshot(proj);
+      const updated = [];
+      for (const u of (args.updates || [])) {
+        const f = findClip(tl, u.clipId);
+        if (!f) continue;
+        if (u.startFrame !== undefined) f.clip.start = u.startFrame;
+        if (u.endFrame !== undefined) f.clip.end = u.endFrame;
+        for (const k of ['speed', 'volumeDb', 'opacity', 'transform', 'crop', 'text', 'start', 'end']) {
+          if (u[k] !== undefined) f.clip[k] = u[k];
+        }
+        if (!(f.clip.end > f.clip.start)) throw new Error('end must be > start for ' + u.clipId);
+        updated.push(u.clipId);
+      }
+      saveProject(proj); return { updated };
+    }
+    case 'copy_clip_settings': {
+      const src = findClip(tl, args.sourceClipId);
+      if (!src) throw new Error('source clip not found');
+      snapshot(proj);
+      const copied = [];
+      for (const id of (args.targetClipIds || [])) {
+        const f = findClip(tl, id);
+        if (f) {
+          if (args.copyColor !== false) f.clip.color = src.clip.color;
+          if (args.copyEffects !== false) f.clip.effects = src.clip.effects;
+          if (args.copyVolume) f.clip.volumeDb = src.clip.volumeDb;
+          copied.push(id);
+        }
+      }
+      saveProject(proj); return { copied };
+    }
+    case 'set_keyframes': {
+      snapshot(proj);
+      const f = findClip(tl, args.clipId);
+      if (!f) throw new Error('clip not found');
+      f.clip.keyframes = f.clip.keyframes || {};
+      f.clip.keyframes[args.property] = args.keyframes;
+      saveProject(proj); return { clipId: args.clipId, property: args.property };
+    }
+    case 'apply_layout': {
+      snapshot(proj);
+      const presets = {
+        fullscreen: { x: 0.5, y: 0.5, scale: 1 },
+        pip_br: { x: 0.8, y: 0.8, scale: 0.25 },
+        pip_bl: { x: 0.2, y: 0.8, scale: 0.25 },
+        split2_l: { x: 0.25, y: 0.5, scale: 0.5 },
+        split2_r: { x: 0.75, y: 0.5, scale: 0.5 }
+      };
+      const applied = [];
+      for (const item of (args.items || [])) {
+        const f = findClip(tl, item.clipId);
+        if (f) { f.clip.transform = presets[item.preset] || item.transform || f.clip.transform; applied.push(item.clipId); }
+      }
+      saveProject(proj); return { applied };
+    }
+    case 'sync_clips': {
+      snapshot(proj);
+      const base = findClip(tl, args.baseClipId);
+      if (!base) throw new Error('base clip not found');
+      const synced = [];
+      for (const id of (args.clipIds || [])) {
+        const f = findClip(tl, id);
+        if (f) { const d = f.clip.end - f.clip.start; f.clip.start = base.clip.start + (args.offset || 0); f.clip.end = f.clip.start + d; synced.push(id); }
+      }
+      saveProject(proj); return { synced };
+    }
+    case 'manage_clip_links': {
+      snapshot(proj);
+      if (args.action === 'link') {
+        const a = findClip(tl, args.clipIdA), b = findClip(tl, args.clipIdB);
+        if (!a || !b) throw new Error('clip not found');
+        a.clip.linkedIds = [...new Set([...(a.clip.linkedIds || []), b.clip.id])];
+        b.clip.linkedIds = [...new Set([...(b.clip.linkedIds || []), a.clip.id])];
+        saveProject(proj); return { linked: [args.clipIdA, args.clipIdB] };
+      }
+      if (args.action === 'unlink') {
+        const f = findClip(tl, args.clipId);
+        if (f) {
+          for (const id of (f.clip.linkedIds || [])) {
+            const o = findClip(tl, id);
+            if (o) o.clip.linkedIds = (o.clip.linkedIds || []).filter(x => x !== f.clip.id);
+          }
+          f.clip.linkedIds = [];
+        }
+        saveProject(proj); return { unlinked: args.clipId };
+      }
+      return { links: tl.tracks.flatMap(t => t.clips.filter(c => (c.linkedIds || []).length).map(c => ({ clipId: c.id, linkedIds: c.linkedIds }))) };
+    }
+    case 'manage_markers': {
+      snapshot(proj);
+      tl.markers = tl.markers || [];
+      if (args.action === 'add') { const m = { id: uid('mkr'), frame: args.frame ?? 0, name: args.name || 'Marker', color: args.color || 'yellow' }; tl.markers.push(m); saveProject(proj); return { markerId: m.id }; }
+      if (args.action === 'remove') { tl.markers = tl.markers.filter(m => m.id !== args.markerId); saveProject(proj); return { removed: args.markerId }; }
+      return { markers: tl.markers };
+    }
+    case 'undo': { const s = proj.undoStack.pop(); if (!s) return { noop: true }; const st = JSON.parse(s); proj.timelines = st.timelines; proj.media = st.media; proj.mediaFolders = st.mediaFolders || []; proj.transcripts = st.transcripts || {}; proj.skills = st.skills || []; proj.activeTimelineId = st.activeTimelineId; saveProject(proj); return { undone: true }; }
     case 'get_media': return { media: proj.media.filter(m => !(args.ids && args.ids.length) || args.ids.includes(m.mediaRef)) };
+    case 'inspect_media': {
+      const m = proj.media.find(m => m.mediaRef === args.mediaRef);
+      if (!m) throw new Error('media not found');
+      return { media: m };
+    }
+    case 'search_media': {
+      const q = String(args.query || '').toLowerCase();
+      return { media: proj.media.filter(m => !q || (m.name || '').toLowerCase().includes(q)) };
+    }
+    case 'organize_media': {
+      snapshot(proj);
+      proj.mediaFolders = proj.mediaFolders || [{ id: 'root', name: 'Library', parent: null }];
+      if (args.action === 'add_folder') { const f = { id: uid('fld'), name: args.name || 'Folder', parent: args.parent || 'root' }; proj.mediaFolders.push(f); saveProject(proj); return { folderId: f.id }; }
+      if (args.action === 'move' && args.mediaRef) {
+        const m = proj.media.find(m => m.mediaRef === args.mediaRef);
+        if (m) m.folder = args.folderId || 'root';
+        saveProject(proj); return { moved: args.mediaRef };
+      }
+      return { folders: proj.mediaFolders };
+    }
     case 'import_media': {
       snapshot(proj);
-      const m = { mediaRef: uid('med'), name: args.name || 'asset', status: 'ready', ...(args.source || {}) };
+      const m = { mediaRef: uid('med'), name: args.name || 'asset', status: 'ready', folder: args.folderId || 'root', ...(args.source || {}) };
       proj.media.push(m); saveProject(proj); return { mediaRef: m.mediaRef, status: 'ready' };
+    }
+    case 'add_texts': {
+      snapshot(proj);
+      const tr = tl.tracks.find(t => t.id === args.trackId) || tl.tracks[0];
+      if (!tr) throw new Error('no tracks: call manage_tracks add first');
+      const added = (args.texts || []).map(t => {
+        const c = { id: uid('clip'), mediaType: 'text', text: t.text || '', start: t.startFrame ?? t.start ?? 0, end: t.endFrame ?? t.end ?? 60, textStyle: t.textStyle || {}, transform: t.transform || { x: 0.5, y: 0.5, scale: 1 }, linkedIds: [] };
+        tr.clips.push(c); return c.id;
+      });
+      saveProject(proj); return { added, trackId: tr.id };
+    }
+    case 'update_text': {
+      snapshot(proj);
+      if (args.captionGroupId) {
+        let n = 0;
+        for (const tr of tl.tracks) for (const c of tr.clips) {
+          if (c.captionGroupId === args.captionGroupId) { if (args.textStyle) c.textStyle = { ...(c.textStyle || {}), ...args.textStyle }; n++; }
+        }
+        saveProject(proj); return { updatedGroup: args.captionGroupId, clips: n };
+      }
+      const f = findClip(tl, args.clipId);
+      if (!f) throw new Error('clip not found');
+      if (args.text !== undefined) f.clip.text = args.text;
+      if (args.textStyle) f.clip.textStyle = { ...(f.clip.textStyle || {}), ...args.textStyle };
+      if (args.transform) f.clip.transform = args.transform;
+      saveProject(proj); return { updated: args.clipId };
+    }
+    case 'add_captions': {
+      snapshot(proj);
+      const tr = tl.tracks.find(t => t.id === args.trackId) || tl.tracks[0];
+      if (!tr) throw new Error('no tracks: call manage_tracks add first');
+      const gid = args.captionGroupId || uid('cap');
+      const added = (args.captions || []).map(c => {
+        const clip = { id: uid('clip'), mediaType: 'caption', captionGroupId: gid, text: c.text || '', start: c.startFrame ?? c.start ?? 0, end: c.endFrame ?? c.end ?? 30, textStyle: args.textStyle || {}, linkedIds: [] };
+        tr.clips.push(clip); return clip.id;
+      });
+      saveProject(proj); return { added, captionGroupId: gid };
+    }
+    case 'get_transcript': {
+      const trs = (proj.transcripts || {})[args.mediaRef || 'timeline'] || { words: [] };
+      return { transcript: trs };
+    }
+    case 'remove_words': {
+      snapshot(proj);
+      proj.transcripts = proj.transcripts || {};
+      const key = args.mediaRef || 'timeline';
+      const t = proj.transcripts[key] || { words: [] };
+      const drop = new Set(args.wordIndexes || []);
+      t.words = (t.words || []).filter((w, i) => !drop.has(i));
+      proj.transcripts[key] = t; saveProject(proj); return { remaining: t.words.length };
+    }
+    case 'remove_silence': {
+      snapshot(proj);
+      return { removedRanges: [], note: 'silence detection needs audio analysis; no ranges removed in this port' };
+    }
+    case 'detect_beats': {
+      const fps = tl.fps || 30;
+      const beats = [];
+      for (let f = 0; f < (args.endFrame || 300); f += Math.round(fps / 2)) beats.push(f);
+      return { beats, fps };
+    }
+    case 'manage_multicam': {
+      snapshot(proj);
+      tl.multicam = tl.multicam || [];
+      if (args.action === 'create') { const g = { id: uid('mc'), name: args.name || 'Multicam', clipIds: args.clipIds || [], activeCam: (args.clipIds || [])[0] || null }; tl.multicam.push(g); saveProject(proj); return { multicamId: g.id }; }
+      if (args.action === 'remove') { tl.multicam = tl.multicam.filter(g => g.id !== args.multicamId); saveProject(proj); return { removed: args.multicamId }; }
+      return { groups: tl.multicam };
+    }
+    case 'change_cam': {
+      snapshot(proj);
+      const g = (tl.multicam || []).find(g => g.id === args.multicamId);
+      if (!g) throw new Error('multicam group not found');
+      g.activeCam = args.clipId; saveProject(proj); return { multicamId: g.id, activeCam: g.activeCam };
+    }
+    case 'get_multicam': return { groups: tl.multicam || [] };
+    case 'apply_color': {
+      snapshot(proj);
+      const applied = [];
+      for (const id of (args.clipIds || [])) {
+        const f = findClip(tl, id);
+        if (f) { f.clip.color = args.color; applied.push(id); }
+      }
+      saveProject(proj); return { applied };
+    }
+    case 'apply_effect': {
+      snapshot(proj);
+      const applied = [];
+      for (const id of (args.clipIds || [])) {
+        const f = findClip(tl, id);
+        if (f) { f.clip.effects = [...(f.clip.effects || []), { type: args.effect, params: args.params || {} }]; applied.push(id); }
+      }
+      saveProject(proj); return { applied };
+    }
+    case 'inspect_color': {
+      const f = findClip(tl, args.clipId);
+      if (!f) throw new Error('clip not found');
+      return { clipId: args.clipId, color: f.clip.color || null, effects: f.clip.effects || [] };
+    }
+    case 'capture_frame':
+    case 'inspect_timeline': {
+      const frame = args.startFrame ?? args.frame ?? 0;
+      const w = tl.width || 1280, h = tl.height || 720;
+      const outPng = path.join(DATA_DIR, 'frames', 'frame_' + frame + '.png');
+      fs.mkdirSync(path.dirname(outPng), { recursive: true });
+      const ffmpegBin = process.env.FFMPEG_PATH || 'ffmpeg';
+      const label = (tool === 'inspect_timeline' ? 'inspect f' : 'frame ') + frame;
+      awaitExec(ffmpegBin, ['-y', '-f', 'lavfi', '-i', `testsrc=size=${w}x${h}:rate=30:duration=1`, '-vf', `drawtext=text='${label}':fontsize=48:fontcolor=white:x=20:y=20`, '-frames:v', '1', outPng]);
+      const buf = fs.existsSync(outPng) ? fs.readFileSync(outPng) : Buffer.alloc(0);
+      const visible = [];
+      for (const tr of tl.tracks) for (const c of tr.clips) {
+        if (c.start <= frame && frame < c.end) visible.push(c.captionGroupId || c.id);
+      }
+      return { frame, png: outPng, imageBase64: buf.toString('base64').slice(0, 200000), visibleTopDown: visible };
+    }
+    case 'generate_video':
+    case 'generate_image':
+    case 'generate_audio':
+    case 'upscale_media':
+      throw new Error(tool + ' requires Palmier cloud sign-in/subscription (canGenerate:false in get_timeline)');
+    case 'send_feedback': return { received: true };
+    case 'read_skill': {
+      const s = (proj.skills || []).find(s => s.name === args.name);
+      if (!s) throw new Error('skill not found');
+      return { skill: s };
+    }
+    case 'manage_skills': {
+      snapshot(proj);
+      proj.skills = proj.skills || [];
+      if (args.action === 'add') { const s = { name: args.name, content: args.content || '' }; proj.skills.push(s); saveProject(proj); return { added: s.name }; }
+      if (args.action === 'remove') { proj.skills = proj.skills.filter(s => s.name !== args.name); saveProject(proj); return { removed: args.name }; }
+      return { skills: proj.skills.map(s => s.name) };
     }
     case 'set_project_settings': {
       snapshot(proj);
