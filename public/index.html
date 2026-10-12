@@ -28,6 +28,7 @@ pre{font-size:11px;white-space:pre-wrap}
 <main>
 <div class="panel"><h3>Media</h3>
 <div class="row"><button onclick="importDemo()">+ demo media</button><button onclick="refresh()">refresh</button></div>
+<div class="row"><input type="file" id="file" multiple accept="video/*,audio/*,image/*,.srt,.vtt"><button onclick="upload()">upload</button></div>
 <div id="media"></div>
 <h3>Markers</h3><div id="markers"></div>
 <div class="row"><input id="mkrName" placeholder="marker name"><button onclick="addMarker()">+ marker @0</button></div>
@@ -70,6 +71,7 @@ async function gradeSel(){await api('apply_color',{clipIds:[SEL],color:{lut:'tea
 function findSel(){for(const tr of TL.tracks){const c=tr.clips.find(c=>c.id===SEL);if(c)return c;}return null;}
 async function addMarker(){await api('manage_markers',{action:'add',frame:0,name:document.getElementById('mkrName').value||'Marker'});refresh();}
 async function importDemo(){await api('import_media',{name:'demo-'+Date.now().toString(36),source:{matte:{color:'#2244aa'}}});refresh();}
+async function upload(){const fs=document.getElementById('file').files;for(const f of fs){const b=await f.arrayBuffer();let bin='';const u8=new Uint8Array(b);for(let i=0;i<u8.length;i+=8192)bin+=String.fromCharCode.apply(null,u8.subarray(i,i+8192));const r=await fetch('/api/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:f.name,dataBase64:btoa(bin),mimeType:f.type})});document.getElementById('out').textContent='upload '+f.name+': '+JSON.stringify(await r.json()).slice(0,300);}refresh();}
 async function doExport(){await api('export_project',{});setTimeout(refresh,9000);}
 async function doUndo(){await api('undo',{});refresh();}
 async function inspect(f){api('inspect_timeline',{startFrame:f}).then(j=>{const b=j.result.imageBase64;if(b)document.getElementById('preview').src='data:image/png;base64,'+b;});}

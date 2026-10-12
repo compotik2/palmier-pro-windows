@@ -88,6 +88,41 @@ function timelineStats(tl, fps) {
   for (const tr of tl.tracks) for (const c of tr.clips) totalFrames = Math.max(totalFrames, c.end);
   return { fps: tl.fps || fps || 30, resolution: [tl.width || 1920, tl.height || 1080], totalFrames, durationSeconds: totalFrames / (tl.fps || 30) };
 }
+const MEDIA_DIR = path.join(DATA_DIR, 'media');
+function mediaDir(projId) { const d = path.join(MEDIA_DIR, projId); fs.mkdirSync(d, { recursive: true }); return d; }
+function ffmpegBin() { return process.env.FFMPEG_PATH || 'ffmpeg'; }
+function ffprobeBin() { return process.env.FFPROBE_PATH || 'ffprobe'; }
+function inferMediaType(name, mime) {
+  const ext = (String(name || '').split('.').pop() || '').toLowerCase();
+  if (/^(mp4|mov|m4v|webm|mkv|avi)$/.test(ext)) return 'video';
+  if (/^(mp3|wav|aac|m4a|aiff|aifc|aif|caf|flac|ogg|opus|wma)$/.test(ext)) return 'audio';
+  if (/^(png|jpg|jpeg|tiff|tif|bmp|webp|heic|heif)$/.test(ext)) return 'image';
+  if (/^(srt|vtt)$/.test(ext)) return 'subtitle';
+  if (mime) {
+    if (mime.startsWith('video/')) return 'video';
+    if (mime.startsWith('audio/')) return 'audio';
+    if (mime.startsWith('image/')) return 'image';
+  }
+  return 'other';
+}
+function probeMedia(file) {
+  try {
+    const out = execFileSync(ffprobeBin(), ['-v', 'error', '-show_entries', 'format=duration,size', '-show_entries', 'stream=index,codec_type,codec_name,width,height,duration', '-of', 'json', file], { timeout: 60000, maxBuffer: 8 * 1024 * 1024 });
+    const j = JSON.parse(String(out));
+    const streams = j.streams || [];
+    const v = streams.find(s => s.codec_type === 'video') || {};
+    const a = streams.find(s => s.codec_type === 'audio') || null;
+    return {
+      duration: parseFloat((j.format || {}).duration) || parseFloat(v.duration) || 0,
+      width: v.width || 0, height: v.height || 0,
+      hasVideo: !!streams.find(s => s.codec_type === 'video'),
+      hasAudio: !!a, streams: streams.map(s => ({ type: s.codec_type, codec: s.codec_name }))
+    };
+  } catch { return { duration: 0, width: 0, height: 0, hasVideo: false, hasAudio: false, streams: [] }; }
+}
+function ffmpegText(s) {
+  return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "\\'").replace(/\n/g, ' ');
+}
 function gapsForClips(clips) {
   const sorted = [...clips].sort((a, b) => a.start - b.start);
   const gaps = [];
@@ -328,8 +363,93 @@ function callTool(proj, tool, args) {
     }
     case 'import_media': {
       snapshot(proj);
-      const m = { mediaRef: uid('med'), name: args.name || 'asset', status: 'ready', folder: args.folderId || 'root', ...(args.source || {}) };
-      proj.media.push(m); saveProject(proj); return { mediaRef: m.mediaRef, status: 'ready' };
+      const src = args.source || {};
+      const keys = ['url', 'path', 'bytes', 'matte'].filter(k => src[k] !== undefined);
+      if (keys.length !== 1) throw new Error("source must set exactly one of: url, path, bytes, matte");
+      const dir = mediaDir(proj.id);
+      const ref = uid('med');
+      const wantName = args.name || (src.url ? String(src.url).split('/').pop().split('?')[0] : null) || ref;
+      const m = { mediaRef: ref, name: wantName, status: 'downloading', folder: args.folderId || 'root' };
+      const finishFile = (file) => {
+        m.file = file;
+        m.mediaType = inferMediaType(m.name, src.mimeType);
+        if (m.mediaType === 'subtitle') { m.status = 'ready'; return m; }
+        Object.assign(m, probeMedia(file));
+        m.status = 'ready';
+        return m;
+      };
+      if (src.matte !== undefined) {
+        const color = (src.matte && src.matte.color) || '#2244aa';
+        const file = path.join(dir, ref + '.png');
+        const ok = awaitExec(ffmpegBin(), ['-y', '-f', 'lavfi', '-i', `color=c=${color}:size=1920x1080:duration=1`, '-frames:v', '1', file]);
+        if (!ok) throw new Error('matte render failed (ffmpeg missing?)');
+        finishFile(file); m.mediaType = 'image'; m.width = 1920; m.height = 1080;
+        proj.media.push(m); saveProject(proj); return { mediaRef: m.mediaRef, status: 'ready' };
+      }
+      if (src.bytes !== undefined) {
+        if (!src.mimeType) throw new Error('source.mimeType is required for bytes');
+        const buf = Buffer.from(src.bytes, 'base64');
+        if (buf.length > 12 * 1024 * 1024) throw new Error('bytes import max ~11 MB binary, use url/path for larger');
+        const file = path.join(dir, ref + '_' + wantName.replace(/[^\w.\-]+/g, '_'));
+        fs.writeFileSync(file, buf);
+        finishFile(file);
+        proj.media.push(m); saveProject(proj); return { mediaRef: m.mediaRef, status: 'ready' };
+      }
+      if (src.path !== undefined) {
+        const p = src.path;
+        if (!fs.existsSync(p)) throw new Error('local file not found: ' + p);
+        const st = fs.statSync(p);
+        let file = p;
+        if (st.isDirectory()) {
+          const added = [];
+          const walk = (d, folder) => {
+            for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+              const full = path.join(d, e.name);
+              if (e.isDirectory()) walk(full, folder);
+              else if (inferMediaType(e.name) !== 'other') {
+                const mm = { mediaRef: uid('med'), name: e.name, status: 'ready', folder, file: full, mediaType: inferMediaType(e.name) };
+                Object.assign(mm, probeMedia(full));
+                proj.media.push(mm); added.push(mm.mediaRef);
+              }
+            }
+          };
+          walk(p, m.folder);
+          saveProject(proj); return { imported: added, status: 'ready' };
+        }
+        const dest = path.join(dir, ref + '_' + path.basename(p).replace(/[^\w.\-]+/g, '_'));
+        fs.copyFileSync(p, dest); file = dest;
+        finishFile(file);
+        proj.media.push(m); saveProject(proj); return { mediaRef: m.mediaRef, status: 'ready' };
+      }
+      // url: background download like the original (poll get_media until ready)
+      if (!/^https:\/\//i.test(src.url)) throw new Error('url must be HTTPS');
+      m.url = src.url;
+      proj.media.push(m); saveProject(proj);
+      const target = path.join(dir, ref + '_' + String(wantName).replace(/[^\w.\-]+/g, '_'));
+      setImmediate(async () => {
+        try {
+          const r = await fetch(src.url);
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          const buf = Buffer.from(await r.arrayBuffer());
+          if (buf.length > 1024 * 1024 * 1024) throw new Error('max 1 GB');
+          fs.writeFileSync(target, buf);
+          const p2 = loadProject(proj.id); if (!p2) return;
+          const mm = p2.media.find(x => x.mediaRef === ref); if (!mm) return;
+          mm.file = target;
+          mm.mediaType = src.mimeType && inferMediaType('', src.mimeType) !== 'other' ? inferMediaType('', src.mimeType) : inferMediaType(mm.name, src.mimeType);
+          if (mm.mediaType !== 'subtitle') Object.assign(mm, probeMedia(target));
+          mm.status = 'ready'; delete mm.error;
+          saveProject(p2);
+        } catch (e) {
+          try {
+            const p2 = loadProject(proj.id); if (!p2) return;
+            const mm = p2.media.find(x => x.mediaRef === ref); if (!mm) return;
+            mm.status = 'failed'; mm.error = String((e && e.message) || e);
+            saveProject(p2);
+          } catch {}
+        }
+      });
+      return { mediaRef: m.mediaRef, status: 'downloading' };
     }
     case 'add_texts': {
       snapshot(proj);
@@ -431,18 +551,32 @@ function callTool(proj, tool, args) {
     case 'capture_frame':
     case 'inspect_timeline': {
       const frame = args.startFrame ?? args.frame ?? 0;
-      const w = tl.width || 1280, h = tl.height || 720;
+      const fps = tl.fps || 30, w = tl.width || 1280, h = tl.height || 720;
       const outPng = path.join(DATA_DIR, 'frames', 'frame_' + frame + '.png');
       fs.mkdirSync(path.dirname(outPng), { recursive: true });
-      const ffmpegBin = process.env.FFMPEG_PATH || 'ffmpeg';
-      const label = (tool === 'inspect_timeline' ? 'inspect f' : 'frame ') + frame;
-      awaitExec(ffmpegBin, ['-y', '-f', 'lavfi', '-i', `testsrc=size=${w}x${h}:rate=30:duration=1`, '-vf', `drawtext=text='${label}':fontsize=48:fontcolor=white:x=20:y=20`, '-frames:v', '1', outPng]);
-      const buf = fs.existsSync(outPng) ? fs.readFileSync(outPng) : Buffer.alloc(0);
       const visible = [];
       for (const tr of tl.tracks) for (const c of tr.clips) {
         if (c.start <= frame && frame < c.end) visible.push(c.captionGroupId || c.id);
       }
-      return { frame, png: outPng, imageBase64: buf.toString('base64').slice(0, 200000), visibleTopDown: visible };
+      const proj0 = loadProject(proj.id);
+      const mediaByRef0 = {};
+      for (const m of (proj0 ? proj0.media : [])) mediaByRef0[m.mediaRef] = m;
+      const top = tl.tracks.flatMap(t => t.clips.map(c => ({ ...c })))
+        .filter(c => c.start <= frame && frame < c.end && (c.mediaType || 'video') !== 'audio')
+        .sort((a, b) => a.start - b.start).pop();
+      const bin = ffmpegBin();
+      if (top && top.mediaRef && mediaByRef0[top.mediaRef] && mediaByRef0[top.mediaRef].file && fs.existsSync(mediaByRef0[top.mediaRef].file) && (mediaByRef0[top.mediaRef].mediaType || 'video') !== 'subtitle') {
+        const mm = mediaByRef0[top.mediaRef];
+        const tSec = ((frame - top.start) / fps) * ((top.speed && top.speed > 0) ? top.speed : 1) + (top.mediaOffset || 0);
+        const vf = `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2` + (top.text ? `,drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='${ffmpegText(top.text)}':fontsize=64:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2` : '');
+        const isImg = (mm.mediaType || '') === 'image';
+        awaitExec(bin, [...(isImg ? [] : ['-ss', String(Math.max(0, tSec))]), '-i', mm.file, '-vf', vf, '-frames:v', '1', outPng]);
+      } else {
+        const label = (tool === 'inspect_timeline' ? 'inspect f' : 'frame ') + frame;
+        awaitExec(bin, ['-y', '-f', 'lavfi', '-i', `color=c=black:size=${w}x${h}:rate=30:duration=1`, '-vf', `drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='${label}':fontsize=48:fontcolor=white:x=20:y=20`, '-frames:v', '1', outPng]);
+      }
+      const buf = fs.existsSync(outPng) ? fs.readFileSync(outPng) : Buffer.alloc(0);
+      return { frame, png: outPng, imageBase64: buf.toString('base64').slice(0, 400000), visibleTopDown: visible };
     }
     case 'generate_video':
     case 'generate_image':
@@ -487,16 +621,102 @@ function callTool(proj, tool, args) {
 }
 
 function runFfmpegExport(proj, tl, outPath, jobId) {
-  // Minimal demo render: 2s test pattern at project resolution/fps.
-  const w = tl.width || 1920, h = tl.height || 1080, fps = tl.fps || 30;
-  const ffmpegBin = process.env.FFMPEG_PATH || 'ffmpeg';
-  const args = ['-y', '-f', 'lavfi', '-i', `testsrc=size=${w}x${h}:rate=${fps}:duration=2`, '-pix_fmt', 'yuv420p', outPath];
-  execFile(ffmpegBin, args, (err) => {
+  // Real timeline render: video/image/text/caption clips -> segments -> concat;
+  // audio clips + video-clip audio -> delayed/mixed track; gaps -> black/silence.
+  const mark = (status) => {
     try {
       const p = loadProject(proj.id); if (!p) return;
-      const j = p.exports.find(e => e.jobId === jobId); if (j) { j.status = err ? 'failed: ' + err.message : 'done'; saveProject(p); }
+      const j = p.exports.find(e => e.jobId === jobId); if (j) { j.status = status; saveProject(p); }
     } catch {}
+  };
+  mark('rendering');
+  setImmediate(() => {
+    try {
+      exportTimeline(proj.id, tl, outPath);
+      mark('done');
+    } catch (e) { mark('failed: ' + String((e && e.message) || e)); }
   });
+}
+function exportTimeline(projId, tl, outPath) {
+  const fps = tl.fps || 30, W = tl.width || 1920, H = tl.height || 1080;
+  const bin = ffmpegBin();
+  const work = path.join(DATA_DIR, 'exports', 'work_' + path.basename(outPath, '.mp4'));
+  fs.mkdirSync(work, { recursive: true });
+  const vtracks = tl.tracks.filter(t => t.type !== 'audio');
+  const vclips = vtracks.flatMap(t => t.clips.map(c => ({ ...c, _trackType: t.type })))
+    .filter(c => (c.mediaType || 'video') !== 'audio')
+    .sort((a, b) => a.start - b.start);
+  let totalF = 0;
+  for (const tr of tl.tracks) for (const c of tr.clips) totalF = Math.max(totalF, c.end);
+  if (!totalF) throw new Error('timeline is empty, nothing to export');
+  const totalS = totalF / fps;
+  const proj = loadProject(projId);
+  const mediaByRef = {};
+  for (const m of (proj ? proj.media : [])) mediaByRef[m.mediaRef] = m;
+  const segFiles = [];
+  let cursor = 0, n = 0;
+  const cover = (fromF, toF) => {
+    if (toF <= fromF) return;
+    const dur = (toF - fromF) / fps;
+    const seg = path.join(work, 'seg' + String(n++).padStart(3, '0') + '.mp4');
+    execFileSync(bin, ['-y', '-f', 'lavfi', '-i', `color=c=black:size=${W}x${H}:rate=${fps}:duration=${dur}`, '-f', 'lavfi', '-i', `anullsrc=r=48000:cl=stereo:d=${dur}`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', String(fps), '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-shortest', seg], { stdio: 'ignore', timeout: 300000 });
+    segFiles.push(seg);
+  };
+  const emitClip = (c) => {
+    const dur = (c.end - c.start) / fps;
+    if (dur <= 0) return;
+    const seg = path.join(work, 'seg' + String(n++).padStart(3, '0') + '.mp4');
+    const m = (c.mediaRef && mediaByRef[c.mediaRef]) || null;
+    const speed = (c.speed && c.speed > 0) ? c.speed : 1;
+    const overlays = [];
+    if (c.text) overlays.push(`drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='${ffmpegText(c.text)}':fontsize=64:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2`);
+    const vfBase = `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,fps=${fps},format=yuv420p` + (overlays.length ? ',' + overlays.join(',') : '');
+    const moff = Math.max(0, (c.mediaOffset || 0));
+    if (!m || !m.file || !fs.existsSync(m.file)) {
+      const color = (m && m.color) || 'gray';
+      execFileSync(bin, ['-y', '-f', 'lavfi', '-i', `color=c=${color}:size=${W}x${H}:rate=${fps}:duration=${dur}`, '-f', 'lavfi', '-i', `anullsrc=r=48000:cl=stereo:d=${dur}`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', String(fps), '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-shortest', seg], { stdio: 'ignore', timeout: 300000 });
+    } else if ((m.mediaType || 'video') === 'image') {
+      execFileSync(bin, ['-y', '-loop', '1', '-framerate', String(fps), '-i', m.file, '-f', 'lavfi', '-i', `anullsrc=r=48000:cl=stereo:d=${dur}`, '-t', String(dur), '-vf', vfBase, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', String(fps), '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-shortest', seg], { stdio: 'ignore', timeout: 300000 });
+    } else {
+      const vf = (speed !== 1 ? `setpts=PTS/${speed},` : '') + vfBase;
+      execFileSync(bin, ['-y', '-ss', String(moff), '-i', m.file, '-f', 'lavfi', '-i', `anullsrc=r=48000:cl=stereo:d=${dur}`, '-t', String(dur), '-vf', vf, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', String(fps), '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-shortest', seg], { stdio: 'ignore', timeout: 300000 });
+    }
+    segFiles.push(seg);
+  };
+  for (const c of vclips) {
+    if (c.start > cursor) cover(cursor, c.start);
+    emitClip(c);
+    cursor = Math.max(cursor, c.end);
+  }
+  if (cursor < totalF) cover(cursor, totalF);
+  // Audio bed: audio clips + audio of video clips, placed at timeline offsets.
+  const aclips = tl.tracks.flatMap(t => t.clips.map(c => ({ ...c }))).filter(c => (c.mediaType === 'audio') || (c.mediaRef && mediaByRef[c.mediaRef] && mediaByRef[c.mediaRef].mediaType === 'audio'));
+  const listFile = path.join(work, 'concat.txt');
+  fs.writeFileSync(listFile, segFiles.map(f => `file '${f.replace(/'/g, "'\\''")}'`).join('\n'));
+  const vcat = path.join(work, 'video.mp4');
+  execFileSync(bin, ['-y', '-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', vcat], { stdio: 'ignore', timeout: 600000 });
+  if (!aclips.length) {
+    execFileSync(bin, ['-y', '-i', vcat, '-f', 'lavfi', '-i', `anullsrc=r=48000:cl=stereo:d=${totalS}`, '-c:v', 'copy', '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-t', String(totalS), outPath], { stdio: 'ignore', timeout: 600000 });
+    return;
+  }
+  const ainputs = [], afilters = [];
+  aclips.forEach((c, i) => {
+    const m = mediaByRef[c.mediaRef];
+    if (!m || !m.file || !fs.existsSync(m.file)) return;
+    const dur = (c.end - c.start) / fps, startS = c.start / fps;
+    const moff = Math.max(0, (c.mediaOffset || 0));
+    ainputs.push('-ss', String(moff), '-i', m.file);
+    const idx = ainputs.length / 3 - 1;
+    const vol = (c.volumeDb && c.volumeDb !== 0) ? `,volume=${Math.pow(10, (c.volumeDb || 0) / 20).toFixed(4)}` : '';
+    afilters.push(`[${idx}:a]atrim=0:${dur},asetpts=PTS-STARTPTS,adelay=${Math.round(startS * 1000)}|${Math.round(startS * 1000)},apad=whole_dur=${totalS}${vol}[a${idx}]`);
+  });
+  if (!afilters.length) {
+    execFileSync(bin, ['-y', '-i', vcat, '-f', 'lavfi', '-i', `anullsrc=r=48000:cl=stereo:d=${totalS}`, '-c:v', 'copy', '-c:a', 'aac', '-t', String(totalS), outPath], { stdio: 'ignore', timeout: 600000 });
+    return;
+  }
+  const mixInputs = afilters.map((_, i) => `[a${i}]`).join('');
+  execFileSync(bin, ['-y', ...ainputs, '-filter_complex', afilters.join(';') + ';' + mixInputs + `amix=inputs=${afilters.length}:normalize=0[aout]`, '-map', '[aout]', '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-t', String(totalS), path.join(work, 'bed.m4a')], { stdio: 'ignore', timeout: 600000 });
+  execFileSync(bin, ['-y', '-i', vcat, '-i', path.join(work, 'bed.m4a'), '-c:v', 'copy', '-c:a', 'aac', '-t', String(totalS), outPath], { stdio: 'ignore', timeout: 600000 });
 }
 
 // ---- HTTP + MCP ----
@@ -547,6 +767,21 @@ app.post('/mcp', (req, res) => {
 });
 
 app.get('/api/projects', (req, res) => res.json(listProjects()));
+app.post('/api/upload', (req, res) => {
+  try {
+    const { name, dataBase64, mimeType } = req.body || {};
+    if (!name || !dataBase64) return res.status(400).json({ error: 'name + dataBase64 required' });
+    const proj = getOrCreateDefault();
+    const dir = mediaDir(proj.id);
+    const ref = uid('med');
+    const file = path.join(dir, ref + '_' + String(name).replace(/[^\w.\-]+/g, '_'));
+    fs.writeFileSync(file, Buffer.from(dataBase64, 'base64'));
+    const m = { mediaRef: ref, name, status: 'ready', folder: 'root', file, mediaType: inferMediaType(name, mimeType) };
+    if (m.mediaType !== 'subtitle') Object.assign(m, probeMedia(file));
+    proj.media.push(m); saveProject(proj);
+    res.json({ mediaRef: ref, status: 'ready', mediaType: m.mediaType, duration: m.duration, width: m.width, height: m.height });
+  } catch (e) { res.status(400).json({ error: String((e && e.message) || e) }); }
+});
 app.get('/health', (req, res) => res.json({ ok: true, port: PORT }));
 
 app.listen(PORT, '127.0.0.1', () => console.log('Palmier Pro Windows port on http://127.0.0.1:' + PORT + '/mcp'));
