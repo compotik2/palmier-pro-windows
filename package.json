@@ -1,0 +1,17 @@
+{
+  "name": "palmier-pro-windows",
+  "version": "0.7.6-win-port",
+  "description": "Palmier Pro Windows port - AI-native video editor, 1-to-1 MCP compatible",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js --dev"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
