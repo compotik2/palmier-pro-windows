@@ -1,0 +1,57 @@
+name: Native Linux build
+on:
+  push:
+    paths: ['native/**', 'LICENSE', 'NOTICE', '.github/workflows/native-linux.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      QT_QPA_PLATFORM: xcb
+      LIBGL_ALWAYS_SOFTWARE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - name: Install Linux runtime and media dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg xvfb pulseaudio fonts-dejavu-core fonts-liberation libegl1 libopengl0 libgl1 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0
+          ffmpeg -version
+      - name: Install Python dependencies
+        working-directory: native
+        run: python -m pip install -r requirements-lock.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Validate official MCP SDK compatibility
+        working-directory: native/mcp-client
+        run: |
+          npm ci
+          npm test
+      - name: Validate domain, MCP and real media
+        working-directory: native
+        run: python -m unittest discover -s tests -v
+      - name: Build Linux portable application
+        working-directory: native
+        run: python scripts/build.py
+      - name: Execute packaged Linux window, timeline and playback
+        working-directory: native
+        run: |
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=palmier-test-sink
+          xvfb-run -a -s '-screen 0 1800x1100x24' ./dist/PalmierProLinux/PalmierProLinux --mcp-port 0 --smoke-test test-output/startup.json
+          xvfb-run -a -s '-screen 0 1800x1100x24' ./dist/PalmierProLinux/PalmierProLinux --verify-media --output test-output/media.json
+          cat test-output/startup.json test-output/media.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PalmierProLinux-x86_64
+          path: |
+            native/dist/*.tar.gz
+            native/dist/SHA256SUMS.txt
+            native/test-output/*

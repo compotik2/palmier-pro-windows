@@ -1,5 +1,5 @@
-"""GPLv3 Windows implementation based on Palmier's last GPL source."""
-VERSION = "0.2.0"
+"""GPLv3 desktop implementation based on Palmier's last GPL source."""
+VERSION = "0.3.0"
 
 # Qt's delay-loaded FFmpeg DLLs must be visible outside the process working directory.
 import os

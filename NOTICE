@@ -1,6 +1,6 @@
-Palmier Pro Windows native development port
+Palmier Pro Windows/Linux native development port
 Copyright (C) 2026 Palmier, Inc. (original Palmier Pro)
-Copyright (C) 2026 Palmier Windows contributors (Windows implementation)
+Copyright (C) 2026 Palmier Windows contributors (Windows/Linux implementation)
 
 This GPLv3 implementation is based on Palmier Pro's last published GPL source:
 https://github.com/palmier-io/palmier-pro/tree/last-gpl-source

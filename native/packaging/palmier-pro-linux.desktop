@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Palmier Pro Linux
+Comment=GPLv3 native timeline editor with local MCP integration
+Exec=PalmierProLinux %f
+Terminal=false
+Categories=AudioVideo;Video;AudioVideoEditing;
+MimeType=inode/directory;
+StartupNotify=true

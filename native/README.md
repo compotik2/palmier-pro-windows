@@ -1,4 +1,7 @@
-# Palmier Pro Windows — native development port 0.2.0
+# Palmier Pro — native Windows/Linux development port 0.3.0
+
+**Linux:** see [LINUX.md](LINUX.md) for the x86_64 build, dependencies and launch
+instructions. Both platforms use the same native Qt editor and MCP tools.
 
 **Real native Qt desktop application; incomplete GPL-source port.** This is not
 a 1:1 or pixel-perfect release. It replaces the Swift/AppKit UI and Apple media
@@ -16,12 +19,12 @@ LICENSE and NOTICE, and [third-party notices](docs/THIRD_PARTY.md).
 
 ## Download and run
 
-Download the **native 0.2.0 prerelease portable ZIP** from
+Download the **native Windows prerelease portable ZIP** from
 [GitHub Releases](https://github.com/compotik2/palmier-pro-windows/releases).
 Extract the entire directory; do not move the EXE away from `_internal`.
 Run `PalmierProWindows.exe`. It is unsigned.
 
-Requirements: Windows 10/11 x64 and FFmpeg/FFprobe **7 or newer** with
+Requirements: Windows 10/11 x64 and FFmpeg/FFprobe **4.4 or newer** with
 libx264/libx265/drawtext. Qt/Python runtime is included in the ZIP. FFmpeg is
 not bundled; install it before launching:
 
@@ -61,6 +64,14 @@ another program occupies it and reports the bind error.
 ## MCP / AI
 
 The open app serves `http://127.0.0.1:19789/mcp` using stateless Streamable HTTP.
+
+**OpenCode:** merge a `palmier-pro` entry into the existing `mcp` object in
+`~/.config/opencode/opencode.jsonc` and restart OpenCode:
+```json
+"palmier-pro": { "type": "remote", "url": "http://127.0.0.1:19789/mcp", "enabled": true }
+```
+Run `opencode mcp list` while Palmier is open. The AI provider comes from the
+user's OpenCode configuration; this is separate from in-app OpenAI BYOK chat.
 
 ```powershell
 codex mcp add palmier-pro --url http://127.0.0.1:19789/mcp
@@ -123,7 +134,7 @@ unsupported original linked/effected projects as if full compatibility exists.
 
 ## Build from source
 
-Python **3.11 x64**, Git, FFmpeg/FFprobe 7+ on PATH:
+Python **3.11 x64**, Git, FFmpeg/FFprobe 4.4+ on PATH:
 
 ```powershell
 git clone https://github.com/compotik2/palmier-pro-windows.git
@@ -146,7 +157,7 @@ npm test
 
 Or use `powershell -ExecutionPolicy Bypass -File .\build.ps1` for tests, build,
 and packaged startup. Output: `dist/PalmierProWindows/PalmierProWindows.exe`
-and `dist/PalmierProWindows-0.2.0-win-x64-portable.zip` plus SHA256SUMS.
+and `dist/PalmierProWindows-0.3.0-win-x64-portable.zip` plus SHA256SUMS.
 Dependencies are pinned; builds are reproducible in procedure, not asserted
 byte-identical. `.github/workflows/native-windows.yml` builds on Windows runners.
 

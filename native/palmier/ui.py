@@ -16,6 +16,8 @@ from .model import Editor, end
 from .media import probe, render, duration, frozen_editor, ExportQueue, run, executable
 from .mcp import Tools, MCPServer
 from .chat import converse
+from .platforms import desktop_name, ui_font
+from . import VERSION
 
 THEME = """
 QWidget {background:#18191C;color:#FAFAFA;font-family:'Segoe UI';font-size:12px;}
@@ -30,6 +32,7 @@ QSlider::groove:horizontal {height:4px;background:#404148;}
 QSlider::handle:horizontal {width:10px;margin:-4px 0;background:#ECECEC;border-radius:5px;}
 QProgressBar {border:1px solid #404148;text-align:center;} QProgressBar::chunk {background:#2E7765;}
 """
+THEME = THEME.replace("Segoe UI", ui_font())
 COLORS = dict(video="#1D5878", audio="#2E7765", image="#715486", text="#715486")
 
 
@@ -82,7 +85,7 @@ class Timeline(QAbstractScrollArea):
             return
         p = QPainter(self.viewport())
         p.fillRect(self.viewport().rect(), QColor("#18191C"))
-        p.setFont(QFont("Segoe UI", 9))
+        p.setFont(QFont(ui_font(), 9))
         scroll_y = self.verticalScrollBar().value()
         for i, tr in enumerate(self.t["tracks"]):
             y = 28+i*58-scroll_y
@@ -296,7 +299,7 @@ class Window(QMainWindow):
         agent,al=self.panel("Agent")
         self.chat_log=QTextEdit()
         self.chat_log.setReadOnly(True)
-        self.chat_log.setPlainText("Connect Codex via MCP:\n\ncodex mcp add palmier-pro --url http://127.0.0.1:19789/mcp\n\nOr set OPENAI_API_KEY and use the BYOK assistant below. API usage may incur charges.\n\nThis build does not reproduce Palmier's subscription generation service.")
+        self.chat_log.setPlainText("Connect OpenCode via MCP:\n\nAdd a remote MCP server named palmier-pro:\nhttp://127.0.0.1:19789/mcp\n\nRestart OpenCode; ask it to edit the active Palmier project. The editor must stay open.\n\nCodex:\ncodex mcp add palmier-pro --url http://127.0.0.1:19789/mcp\n\nOr set OPENAI_API_KEY for the BYOK assistant below. This build does not reproduce Palmier's subscription generation service.")
         al.addWidget(self.chat_log)
         self.chat_input=QLineEdit()
         self.chat_input.setPlaceholderText("Ask your agent…")
@@ -431,8 +434,8 @@ class Window(QMainWindow):
         for label,key,call in [("Undo","Ctrl+Z",lambda:self.act(self.editor.undo)),("Redo","Ctrl+Shift+Z",lambda:self.act(lambda:self.editor.undo(True))),("Split at playhead","Ctrl+K",self.split_selected),("Delete clip","Delete",self.delete_selected),("Cut clip","Ctrl+X",self.cut_selected),("Copy clip","Ctrl+C",self.copy_selected),("Paste clip","Ctrl+V",self.paste_selected)]:
             action(edit,label,key,call)
         action(playback,"Play / Pause","Space",self.toggle_play)
-        action(help_menu,"MCP connection instructions",None,lambda:QMessageBox.information(self,"MCP",self.connection.text()+"\n\ncodex mcp add palmier-pro --url http://127.0.0.1:19789/mcp\n\nOnly implemented tool subsets are advertised. Loopback only; browser origins refused. Optional PALMIER_MCP_TOKEN requires a Bearer header."))
-        action(help_menu,"About / License",None,lambda:QMessageBox.information(self,"Palmier Pro Windows","GPLv3 development port · 0.2.0\nBased on Palmier, Inc. last-gpl-source.\nNative Qt 6 / FFmpeg. Not feature-complete or pixel-perfect.\nSee README, LICENSE and third-party notices."))
+        action(help_menu,"MCP connection instructions",None,lambda:QMessageBox.information(self,"MCP",self.connection.text()+"\n\nOpenCode: add mcp.palmier-pro with type remote, url http://127.0.0.1:19789/mcp and enabled true in ~/.config/opencode/opencode.jsonc; restart OpenCode.\n\ncodex mcp add palmier-pro --url http://127.0.0.1:19789/mcp\n\nOnly implemented tool subsets are advertised. Loopback only; browser origins refused. Optional PALMIER_MCP_TOKEN requires a Bearer header."))
+        action(help_menu,"About / License",None,lambda:QMessageBox.information(self,desktop_name(),f"GPLv3 development port · {VERSION}\nBased on Palmier, Inc. last-gpl-source.\nNative Qt 6 / FFmpeg. Not feature-complete or pixel-perfect.\nSee README, LICENSE and third-party notices."))
         action(help_menu,"About Qt",None,lambda:QMessageBox.aboutQt(self,"Qt licensing"))
 
     def act(self,callback):
@@ -463,7 +466,7 @@ class Window(QMainWindow):
             return
         if self.preview_job_revision != -1 and self.preview_job_revision != self.editor.revision:
             self.preview_cancel.set()
-        self.setWindowTitle(self.editor.name+(" *" if self.editor.dirty else "")+" — Palmier Pro Windows")
+        self.setWindowTitle(self.editor.name+(" *" if self.editor.dirty else "")+" — "+desktop_name())
         self.timeline.refresh()
         with self.editor.lock:
             media=copy.deepcopy(self.editor.manifest["entries"])

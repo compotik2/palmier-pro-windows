@@ -8,8 +8,10 @@ import subprocess
 import sys
 import tempfile
 import threading
+from functools import lru_cache
 from pathlib import Path
 from .model import uid, end, number
+from .platforms import text_font
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
@@ -19,7 +21,7 @@ def executable(name):
     if override:
         return override
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
-    bundled = base / "vendor" / (name + ".exe")
+    bundled = base / "vendor" / (name + (".exe" if os.name == "nt" else ""))
     if bundled.is_file():
         return str(bundled)
     found = shutil.which(name)
@@ -31,6 +33,22 @@ def executable(name):
 def run(args, **kwargs):
     return subprocess.run(args, check=True, capture_output=True,
                           creationflags=CREATE_NO_WINDOW, **kwargs)
+
+
+def parse_ffmpeg_major(output):
+    match = re.search(r"ffmpeg version (?:n)?(\d+)\.(\d+)", output)
+    if not match:
+        raise ValueError("Cannot identify FFmpeg release version; install FFmpeg 4.4 or newer")
+    major = int(match.group(1))
+    if major < 4 or (major == 4 and int(match.group(2)) < 4):
+        raise ValueError("FFmpeg 4.4 or newer is required")
+    return major
+
+
+@lru_cache(maxsize=8)
+def filter_file_option(binary):
+    version = run([binary, "-version"], timeout=10).stdout.decode("utf-8", errors="replace")
+    return "-/filter_complex" if parse_ffmpeg_major(version) >= 7 else "-filter_complex_script"
 
 
 def probe(file):
@@ -120,9 +138,7 @@ def filter_graph(editor, timeline, work, resolution="Match Timeline"):
                     color = "#" + "".join(f"{round(color.get(k, 1)*255):02x}" for k in ("r", "g", "b"))
                 if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
                     raise ValueError("Text color must be #RRGGBB")
-                font = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "arial.ttf"
-                if not font.is_file():
-                    raise ValueError("Arial font not available for text rendering")
+                font = text_font()
                 shutil.copyfile(font, work / "render-font.ttf")
                 size = number(style.get("fontSize", 96), "fontSize", 12, 300) * height / timeline["height"]
                 alpha = str(opacity)
@@ -187,7 +203,7 @@ def render(editor, timeline, destination, codec="H.264", resolution="Match Timel
         args, filters, visual, total = filter_graph(editor, timeline, work, resolution)
         script = work / "filters.txt"
         script.write_text(";".join(filters + (["[aout]anullsink"] if frame is not None else [])), encoding="utf-8")
-        args.extend(["-/filter_complex", "filters.txt", "-map", visual if visual == "0:v" else f"[{visual}]"])
+        args.extend([filter_file_option(executable("ffmpeg")), "filters.txt", "-map", visual if visual == "0:v" else f"[{visual}]"])
         if frame is not None:
             args.extend(["-ss", str(frame / timeline["fps"]), "-frames:v", "1", "-threads", "1", "-update", "1"])
         else:

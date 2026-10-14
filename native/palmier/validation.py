@@ -11,6 +11,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from palmier.ui import Window
 from palmier.media import executable,probe,run
+from palmier.platforms import desktop_name
 
 
 def wait_until(predicate,timeout=30):
@@ -66,7 +67,7 @@ def main():
         results["keyboardUndo"]=len(window.editor.timeline["tracks"][0]["clips"])==1
         QTest.keyClick(window,Qt.Key_Z,Qt.ControlModifier|Qt.ShiftModifier)
         results["keyboardRedo"]=len(window.editor.timeline["tracks"][0]["clips"])==2
-        window.editor.add_texts([dict(startFrame=0,endFrame=90,content="Palmier · Windows",style=dict(fontSize=24,color="#FFFFFF"))])
+        window.editor.add_texts([dict(startFrame=0,endFrame=90,content=desktop_name(),style=dict(fontSize=24,color="#FFFFFF"))])
         frames=[]
         window.sink.videoFrameChanged.connect(lambda frame:frames.append(frame.isValid()))
         window.editor.current_frame=0

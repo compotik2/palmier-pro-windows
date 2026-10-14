@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 from palmier.ui import Window
+from palmier.platforms import desktop_name
 
 
 def main():
@@ -18,7 +19,7 @@ def main():
     parser.add_argument("--smoke-test",help="Write startup report and screenshot, then exit")
     args=parser.parse_args()
     app=QApplication(sys.argv)
-    app.setApplicationName("Palmier Pro Windows")
+    app.setApplicationName(desktop_name())
     window=Window(args.mcp_port)
     if args.project:
         window.editor.load(args.project)

@@ -2,10 +2,12 @@
 
 ## Native Windows application (new)
 
-The native **Qt 6 desktop port** is in [`native/`](native/README.md).
+The native **Qt 6 desktop port for Windows and Linux** is in [`native/`](native/README.md).
 It has a real Windows window, timeline editing, FFmpeg composition/export,
 native multimedia playback and MCP integration. Download the portable native
 prerelease from [Releases](https://github.com/compotik2/palmier-pro-windows/releases).
+Linux build and launch instructions: [`native/LINUX.md`](native/LINUX.md).
+OpenCode connects to the running editor using the local HTTP MCP endpoint.
 
 **This project is incomplete, not pixel-perfect and not a 1:1 port.** See the
 accurate [compatibility table](native/README.md#compatibility--validation-scope),
