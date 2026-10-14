@@ -45,9 +45,10 @@ jobs:
         shell: pwsh
         run: |
           $p = Start-Process -FilePath dist/PalmierProWindows/PalmierProWindows.exe -ArgumentList '--verify-media', '--output', "$PWD/test-output/media.json" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Packaged media check failed: $($p.ExitCode)" }
           Get-Content test-output/media.json
+          if ($p.ExitCode -ne 0) { throw "Packaged media check failed: $($p.ExitCode)" }
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: PalmierProWindows-win-x64
           path: |

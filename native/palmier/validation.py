@@ -46,6 +46,7 @@ def main():
         window.raise_()
         window.activateWindow()
         results["windowActivated"]=wait_until(window.isActiveWindow,timeout=5)
+        QTest.qWait(300)
         point=QPoint(round(window.timeline.position(15)),52)
         QTest.mouseClick(window.timeline.viewport(),Qt.LeftButton,pos=point)
         results["mouseSelectClip"]=window.selected_id==cid
