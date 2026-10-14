@@ -1,0 +1,56 @@
+name: Native Windows build
+on:
+  push:
+    paths: ['native/**', 'LICENSE', 'NOTICE', '.github/workflows/native-windows.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - name: Install media tools
+        run: choco install ffmpeg --version=8.0.1 -y --no-progress
+      - name: Install Python dependencies
+        working-directory: native
+        run: python -m pip install -r requirements-lock.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Validate official MCP SDK compatibility
+        working-directory: native/mcp-client
+        run: |
+          npm ci
+          npm test
+      - name: Validate domain, MCP and real media
+        working-directory: native
+        run: python -m unittest discover -s tests -v
+      - name: Build native portable application
+        working-directory: native
+        run: python scripts/build.py
+      - name: Execute packaged startup
+        working-directory: native
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/PalmierProWindows/PalmierProWindows.exe -ArgumentList '--mcp-port', '0', '--smoke-test', "$PWD/test-output/startup.json" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Packaged startup failed: $($p.ExitCode)" }
+          Get-Content test-output/startup.json
+      - name: Execute packaged editing and media playback
+        working-directory: native
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/PalmierProWindows/PalmierProWindows.exe -ArgumentList '--verify-media', '--output', "$PWD/test-output/media.json" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Packaged media check failed: $($p.ExitCode)" }
+          Get-Content test-output/media.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PalmierProWindows-win-x64
+          path: |
+            native/dist/*.zip
+            native/dist/SHA256SUMS.txt
+            native/test-output/*

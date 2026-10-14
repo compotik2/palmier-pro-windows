@@ -1,0 +1,7 @@
+{
+  "name": "palmier-native-mcp-verification",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node verify.mjs" },
+  "dependencies": { "@modelcontextprotocol/sdk": "1.32.1" }
+}
