@@ -1,0 +1,29 @@
+Palmier Pro Windows native development port
+Copyright (C) 2026 Palmier, Inc. (original Palmier Pro)
+Copyright (C) 2026 Palmier Windows contributors (Windows implementation)
+
+This GPLv3 implementation is based on Palmier Pro's last published GPL source:
+https://github.com/palmier-io/palmier-pro/tree/last-gpl-source
+Commit: 8805801fa4df8bc2dbc57cb0a854a1f5108f95c6
+Original project: https://github.com/palmier-io/palmier-pro
+The original source version is 0.7.6, build 84.
+
+This is an independent, incomplete port, not an official Palmier release.
+No proprietary post-GPL binary or proprietary backend is included.
+The Windows project model and tool contracts derive from the GPL model and
+ToolDefinitions.swift. Those concepts are translated to Python/Qt/FFmpeg.
+Original attribution and GPLv3 apply to the derivative application.
+
+Qt/PySide6: Qt Company and contributors, LGPLv3/GPLv3 and component-specific
+licenses. DLLs remain separately replaceable in the portable distribution.
+Python: Python Software Foundation license.
+PyInstaller: GPLv2-or-later with bootloader distribution exception.
+jsonschema and dependencies: MIT and other permissive component licenses.
+FFmpeg command-line executable: not included; install separately. Qt's
+replaceable FFmpeg decoding DLLs are included with Qt Multimedia. The Gyan build
+is GPLv3-enabled. The installed FFmpeg source/build provenance is recorded by
+native/scripts/build.py. Respect the licenses of the FFmpeg build you use.
+Microsoft system fonts are looked up at runtime, never redistributed.
+
+See LICENSE and native/docs/THIRD_PARTY.md. Build scripts collect installed
+Python distribution license files in the packaged application.
