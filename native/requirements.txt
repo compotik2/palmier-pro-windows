@@ -1,0 +1,3 @@
+PySide6==6.8.3
+PyInstaller==6.16.0
+jsonschema==4.25.1
