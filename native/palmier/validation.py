@@ -43,7 +43,9 @@ def main():
         window.editor.add_track("video")
         cid=window.editor.add_clips([dict(mediaRef=entry["id"],trackIndex=0,startFrame=0,endFrame=90)])["clipIds"][0]
         window.show()
-        QTest.qWait(300)
+        window.raise_()
+        window.activateWindow()
+        results["windowActivated"]=wait_until(window.isActiveWindow,timeout=5)
         point=QPoint(round(window.timeline.position(15)),52)
         QTest.mouseClick(window.timeline.viewport(),Qt.LeftButton,pos=point)
         results["mouseSelectClip"]=window.selected_id==cid
@@ -94,7 +96,7 @@ def main():
         target.write_text(json.dumps(results,indent=2),encoding="utf-8")
         print(json.dumps(results,indent=2))
         window.close()
-        required=["mouseSelectClip","mouseMoveClip","mouseTrimClip","keyboardSplit","keyboardUndo","keyboardRedo","renderedPlaybackFrames","previewPixmapVisible","screenshotCaptured","windowVisible"]
+        required=["windowActivated","mouseSelectClip","mouseMoveClip","mouseTrimClip","keyboardSplit","keyboardUndo","keyboardRedo","renderedPlaybackFrames","previewPixmapVisible","screenshotCaptured","windowVisible"]
         return 0 if all(results[k] for k in required) else 1
 
 

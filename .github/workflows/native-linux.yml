@@ -21,7 +21,7 @@ jobs:
       - name: Install Linux runtime and media dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg xvfb pulseaudio fonts-dejavu-core fonts-liberation libegl1 libopengl0 libgl1 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0
+          sudo apt-get install -y ffmpeg xvfb openbox pulseaudio fonts-dejavu-core fonts-liberation libegl1 libopengl0 libgl1 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0
           ffmpeg -version
       - name: Install Python dependencies
         working-directory: native
@@ -45,10 +45,11 @@ jobs:
         run: |
           pulseaudio --start --exit-idle-time=-1
           pactl load-module module-null-sink sink_name=palmier-test-sink
-          xvfb-run -a -s '-screen 0 1800x1100x24' ./dist/PalmierProLinux/PalmierProLinux --mcp-port 0 --smoke-test test-output/startup.json
-          xvfb-run -a -s '-screen 0 1800x1100x24' ./dist/PalmierProLinux/PalmierProLinux --verify-media --output test-output/media.json
+          xvfb-run -a -s '-screen 0 1800x1100x24' sh -c 'openbox >/tmp/palmier-openbox-startup.log 2>&1 & exec ./dist/PalmierProLinux/PalmierProLinux --mcp-port 0 --smoke-test test-output/startup.json'
+          xvfb-run -a -s '-screen 0 1800x1100x24' sh -c 'openbox >/tmp/palmier-openbox-media.log 2>&1 & exec ./dist/PalmierProLinux/PalmierProLinux --verify-media --output test-output/media.json'
           cat test-output/startup.json test-output/media.json
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: PalmierProLinux-x86_64
           path: |
