@@ -49,10 +49,21 @@ def inspect_artifact(root,system):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument("--linux",required=True,type=Path)
-    parser.add_argument("--windows",required=True,type=Path)
-    parser.add_argument("--output",required=True,type=Path)
+    parser.add_argument("--linux",type=Path)
+    parser.add_argument("--windows",type=Path)
+    parser.add_argument("--output",type=Path)
+    parser.add_argument("--verify-source",type=Path)
     args=parser.parse_args()
+    if args.verify_source:
+        with zipfile.ZipFile(args.verify_source) as source:
+            names=set(source.namelist())
+            required={"LICENSE", "NOTICE", "native/main.py", "native/requirements-lock.txt", "native/scripts/build.py", ".github/workflows/native-linux.yml"}
+            if required-names or source.testzip() is not None:
+                raise ValueError("Source archive must contain the complete repository root, license and build recipes")
+        print(json.dumps(dict(verifiedSource=True,archive=str(args.verify_source),sha256=digest(args.verify_source),entries=len(names)),indent=2))
+        return
+    if not all((args.linux,args.windows,args.output)):
+        parser.error("Supply --verify-source or --linux/--windows/--output")
     payloads=[(system,root,*inspect_artifact(root,system)) for system,root in [("linux",args.linux),("windows",args.windows)]]
     args.output.mkdir(exist_ok=False)
     sums=[]
