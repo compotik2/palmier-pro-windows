@@ -1,4 +1,21 @@
-# Palmier Pro — Windows Port (1-to-1 MCP compatible)
+# Palmier Pro — Windows development port
+
+## Native Windows application (new)
+
+The native **Qt 6 desktop port** is in [`native/`](native/README.md).
+It has a real Windows window, timeline editing, FFmpeg composition/export,
+native multimedia playback and MCP integration. Download the portable native
+prerelease from [Releases](https://github.com/compotik2/palmier-pro-windows/releases).
+
+**This project is incomplete, not pixel-perfect and not a 1:1 port.** See the
+accurate [compatibility table](native/README.md#compatibility--validation-scope),
+[migration analysis](native/docs/MIGRATION.md), [LICENSE](LICENSE) and [NOTICE](NOTICE).
+The previous Node/browser implementation below is a historical experiment;
+its 1-to-1/stub claims do not describe verified native functionality.
+
+---
+
+## Historical Node/browser experiment
 
 Windows reimplementation of [palmier-io/palmier-pro](https://github.com/palmier-io/palmier-pro) (`last-gpl-source`, v0.7.6, GPLv3).
 
