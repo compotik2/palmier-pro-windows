@@ -721,7 +721,7 @@ class Window(QMainWindow):
             self.preview_stack.setCurrentWidget(self.video)
             self.player.play()
             self.statusBar().showMessage("Composited playback")
-        self.task(work,ready)
+        self.preview_future=self.task(work,ready)
 
     @Slot(QVideoFrame)
     def present_frame(self, frame):

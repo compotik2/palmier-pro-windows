@@ -85,6 +85,9 @@ def main():
         results["playbackState"]=str(window.player.playbackState())
         results["source"]=window.player.source().toString()
         results["statusMessage"]=window.statusBar().currentMessage()
+        results["previewRenderCancelled"]=window.preview_cancel.is_set()
+        results["previewRenderFinished"]=window.preview_future.done() if window.preview_future else None
+        results["previewRenderError"]=str(window.preview_future.exception()) if window.preview_future and window.preview_future.done() and not window.preview_future.cancelled() else None
         results["audioOutputConnected"]=window.player.audioOutput() is window.audio
         results["audioDeviceAvailable"]=not window.audio.device().isNull()
         window.player.pause()

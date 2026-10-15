@@ -242,6 +242,43 @@ class MediaTests(unittest.TestCase):
         correlation=sum(a[i]*b[i] for i in range(n))/math.sqrt(sum(v*v for v in a[:n])*sum(v*v for v in b[:n]))
         self.assertGreater(correlation,.98)
 
+    def test_split_video_audio_graph_finishes(self):
+        self.e.split([dict(clipId=self.cid,atFrame=30)])
+        cancel=threading.Event()
+        timer=threading.Timer(20,cancel.set)
+        timer.start()
+        try:
+            output=self.root/"split-audio.mp4"
+            render(self.e,self.e.timeline,output,cancel=cancel)
+            self.assertAlmostEqual(probe(output)["duration"],2,delta=.1)
+        finally:
+            timer.cancel()
+
+    def test_aac_encoder_priming_is_preserved_at_zero_source_trim(self):
+        import array,math,wave
+        rate=44100
+        wave_path=self.root/"source-wave.wav"
+        samples=array.array("h",(round(14000*math.sin(2*math.pi*(170*(i/rate)+210*(i/rate)**2))) for i in range(rate*2)))
+        with wave.open(str(wave_path),"wb") as file:
+            file.setnchannels(1)
+            file.setsampwidth(2)
+            file.setframerate(rate)
+            file.writeframes(samples.tobytes())
+        encoded=self.root/"primed.m4a"
+        run([executable("ffmpeg"),"-v","error","-y","-i",str(wave_path),"-c:a","aac",str(encoded)],timeout=30)
+        asset=probe(encoded)
+        self.e.import_entry(asset)
+        self.e.timeline["tracks"][0]["muted"]=True
+        self.e.add_clips([dict(mediaRef=asset["id"],startFrame=0,endFrame=60)])
+        output=self.root/"aac-aligned.mp4"
+        render(self.e,self.e.timeline,output)
+        def decode(path):
+            return array.array("f",run([executable("ffmpeg"),"-v","error","-i",str(path),"-map","0:a:0","-ac","1","-ar","48000","-f","f32le","pipe:1"],timeout=30).stdout)
+        a,b=decode(encoded),decode(output)
+        n=min(len(a),len(b))
+        correlation=sum(a[i]*b[i] for i in range(n))/math.sqrt(sum(v*v for v in a[:n])*sum(v*v for v in b[:n]))
+        self.assertGreater(correlation,.98)
+
 
 if __name__=="__main__":
     unittest.main()

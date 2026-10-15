@@ -157,7 +157,9 @@ def filter_graph(editor, timeline, work, resolution="Match Timeline"):
                 raise ValueError("Missing media: " + str(file))
             if m["type"] == "image":
                 args.extend(["-loop", "1"])
-            args.extend(["-ss", str(c.get("trimStartFrame", 0)/fps), "-t", str(length*speed), "-i", str(file)])
+            if c.get("trimStartFrame",0):
+                args.extend(["-ss",str(c["trimStartFrame"]/fps)])
+            args.extend(["-t", str(length*speed), "-i", str(file)])
             source = index
             index += 1
             if c["mediaType"] != "audio":
@@ -179,7 +181,7 @@ def filter_graph(editor, timeline, work, resolution="Match Timeline"):
                     remaining /= .5
                 if remaining!=1:
                     tempo.append(f"atempo={remaining}")
-                af = ",".join(["asetpts=PTS-STARTPTS",*tempo,f"atrim=duration={length}",f"volume={c.get('volume',1)}"])
+                af = ",".join(["asetpts=PTS-STARTPTS","aresample=48000:async=0",*tempo,f"atrim=duration={length}",f"volume={c.get('volume',1)}"])
                 if fadein:
                     af += f",afade=t=in:st=0:d={fadein}"
                 if fadeout:
