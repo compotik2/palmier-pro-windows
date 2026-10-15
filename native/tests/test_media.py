@@ -218,6 +218,30 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(info["sourceWidth"],0)
         self.assertTrue(info["hasAudio"])
 
+    def test_unit_speed_preserves_music_waveform_alignment(self):
+        import array,math,wave
+        rate=44100
+        music=self.root/"chirp.wav"
+        samples=array.array("h",(round(13000*(math.sin(2*math.pi*(130*(i/rate)+170*(i/rate)**2))+.35*math.sin(2*math.pi*530*(i/rate)))) for i in range(rate*2)))
+        with wave.open(str(music),"wb") as file:
+            file.setnchannels(1)
+            file.setsampwidth(2)
+            file.setframerate(rate)
+            file.writeframes(samples.tobytes())
+        m=probe(music)
+        self.e.import_entry(m)
+        self.e.timeline["tracks"][0]["muted"]=True
+        self.e.add_clips([dict(mediaRef=m["id"],startFrame=0,endFrame=60)])
+        output=self.root/"identity-audio.mp4"
+        render(self.e,self.e.timeline,output)
+        def decode(path):
+            raw=run([executable("ffmpeg"),"-v","error","-i",str(path),"-map","0:a:0","-ac","1","-ar","48000","-f","f32le","pipe:1"],timeout=30).stdout
+            return array.array("f",raw)
+        a,b=decode(music),decode(output)
+        n=min(len(a),len(b))
+        correlation=sum(a[i]*b[i] for i in range(n))/math.sqrt(sum(v*v for v in a[:n])*sum(v*v for v in b[:n]))
+        self.assertGreater(correlation,.98)
+
 
 if __name__=="__main__":
     unittest.main()

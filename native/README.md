@@ -1,4 +1,4 @@
-# Palmier Pro — native Windows/Linux development port 0.4.0
+# Palmier Pro — native Windows/Linux development port 0.4.1
 
 **Linux:** see [LINUX.md](LINUX.md) for the x86_64 build, dependencies and launch
 instructions. Both platforms use the same native Qt editor and MCP tools.
@@ -169,7 +169,7 @@ npm test
 
 Or use `powershell -ExecutionPolicy Bypass -File .\build.ps1` for tests, build,
 and packaged startup. Output: `dist/PalmierProWindows/PalmierProWindows.exe`
-and `dist/PalmierProWindows-0.4.0-win-x64-portable.zip` plus SHA256SUMS.
+and `dist/PalmierProWindows-0.4.1-win-x64-portable.zip` plus SHA256SUMS.
 Dependencies are pinned; builds are reproducible in procedure, not asserted
 byte-identical. `.github/workflows/native-windows.yml` builds on Windows runners.
 

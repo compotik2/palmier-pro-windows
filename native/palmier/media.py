@@ -177,8 +177,9 @@ def filter_graph(editor, timeline, work, resolution="Match Timeline"):
                 while remaining < .5:
                     tempo.append("atempo=0.5")
                     remaining /= .5
-                tempo.append(f"atempo={remaining}")
-                af = f"asetpts=PTS-STARTPTS,{','.join(tempo)},atrim=duration={length},volume={c.get('volume',1)}"
+                if remaining!=1:
+                    tempo.append(f"atempo={remaining}")
+                af = ",".join(["asetpts=PTS-STARTPTS",*tempo,f"atrim=duration={length}",f"volume={c.get('volume',1)}"])
                 if fadein:
                     af += f",afade=t=in:st=0:d={fadein}"
                 if fadeout:
