@@ -54,6 +54,11 @@ another program occupies it and reports the bind error.
    a composited 720p cache with FFmpeg, then uses native Qt Multimedia with
    audio. Timeline edits invalidate that cache. This is accurate composite
    playback but **not immediate real-time multi-source preview**.
+   Qt preview decoding defaults to software for reliable CPU frame presentation.
+   Advanced users can override `QT_FFMPEG_DECODING_HW_DEVICE_TYPES` with a
+   supported Qt backend such as `d3d11va` or `vaapi`. Export hardware encoding
+   remains independently selectable. Systems without an audio output device
+   use video-only playback instead of waiting on a missing device.
 7. File → Save (`Ctrl+S`) creates a `.palmier` directory package. File → Open
    selects that directory. Save As requires a new destination. Media files
    imported by absolute path remain external references.

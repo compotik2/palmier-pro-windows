@@ -17,6 +17,10 @@ Development prerelease; original feature/pixel parity remains incomplete.
   preserving unrelated clips at the old position.
 - No-op moves preserve history and clip ordering.
 - Save As refuses a destination directory that appeared during collection.
+- MP3 album artwork no longer misclassifies an audio file as a video clip.
+- Preview uses software decoding by default for CPU-presented frames, with an
+  explicit Qt environment override for tested hardware backends. A system with
+  no audio output device starts video-only instead of attaching a null device.
 
 ## New useful features
 
@@ -34,7 +38,7 @@ not claimed. No proprietary generation service is added.
 
 ## Verification
 
-52 automated tests passed locally after reproducing the original failures.
+53 automated tests cover the reproduced failures and new save/export behavior.
 Official MCP SDK edit/readback/undo/export/portable-save checks passed. Native
 mouse/keyboard editing and visible video playback were executed locally.
 Platform CI builds and packaged execution are recorded in the corresponding

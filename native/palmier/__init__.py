@@ -3,6 +3,7 @@ VERSION = "0.4.0"
 
 # Qt's delay-loaded FFmpeg DLLs must be visible outside the process working directory.
 import os
+os.environ.setdefault("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", ",")
 if os.name == "nt":
     import ctypes
     from pathlib import Path

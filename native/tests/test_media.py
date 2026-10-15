@@ -207,6 +207,17 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(queue.list()[0]["status"],"failed")
         self.assertEqual(output.read_bytes(),b"other writer")
 
+    def test_mp3_album_art_is_audio_not_a_video_track(self):
+        cover=self.root/"cover.jpg"
+        run([executable("ffmpeg"),"-v","error","-y","-i",str(self.red),"-frames:v","1",str(cover)],timeout=30)
+        output=self.root/"album.mp3"
+        run([executable("ffmpeg"),"-v","error","-y","-i",str(self.red),"-i",str(cover),
+             "-map","0:a","-map","1:v","-c:a","libmp3lame","-c:v","copy","-id3v2_version","3",str(output)],timeout=30)
+        info=probe(output)
+        self.assertEqual(info["type"],"audio")
+        self.assertEqual(info["sourceWidth"],0)
+        self.assertTrue(info["hasAudio"])
+
 
 if __name__=="__main__":
     unittest.main()

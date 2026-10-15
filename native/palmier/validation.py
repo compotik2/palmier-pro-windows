@@ -86,6 +86,7 @@ def main():
         results["source"]=window.player.source().toString()
         results["statusMessage"]=window.statusBar().currentMessage()
         results["audioOutputConnected"]=window.player.audioOutput() is window.audio
+        results["audioDeviceAvailable"]=not window.audio.device().isNull()
         window.player.pause()
         target=Path(args.output).resolve()
         target.parent.mkdir(parents=True,exist_ok=True)

@@ -57,7 +57,7 @@ def probe(file):
         raise ValueError("Media file is missing: " + str(file))
     data = json.loads(run([executable("ffprobe"), "-v", "error", "-show_streams", "-show_format", "-of", "json", str(file)], timeout=30).stdout)
     streams = data.get("streams", [])
-    video = next((s for s in streams if s["codec_type"] == "video"), None)
+    video = next((s for s in streams if s["codec_type"] == "video" and not s.get("disposition",{}).get("attached_pic")), None)
     audio = any(s["codec_type"] == "audio" for s in streams)
     image = file.suffix.lower() in (".png", ".jpg", ".jpeg")
     if not video and not audio:

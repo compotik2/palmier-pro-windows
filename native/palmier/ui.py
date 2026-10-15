@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, Q
     QLabel, QPushButton, QListWidget, QListWidgetItem, QAbstractScrollArea, QStackedWidget,
     QFileDialog, QMessageBox, QSlider, QFormLayout, QSpinBox, QDoubleSpinBox, QComboBox,
     QDialog, QDialogButtonBox, QLineEdit, QTextEdit, QInputDialog, QProgressBar, QCheckBox, QListView)
-from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QVideoSink, QVideoFrame
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QVideoSink, QVideoFrame, QMediaDevices
 from .model import Editor, end
 from .media import probe, render, duration, frozen_editor, ExportQueue, run, executable
 from .mcp import Tools, MCPServer
@@ -265,7 +265,9 @@ class Window(QMainWindow):
         self.setStyleSheet(THEME)
         self.player=QMediaPlayer(self)
         self.audio=QAudioOutput(self)
-        self.player.setAudioOutput(self.audio)
+        self.media_devices=QMediaDevices(self)
+        self.media_devices.audioOutputsChanged.connect(self.configure_audio)
+        self.configure_audio()
         self.audio.setVolume(1)
         self.player.positionChanged.connect(self.play_position)
         self.player.errorOccurred.connect(lambda error,msg: self.statusBar().showMessage("Playback: "+msg,15000))
@@ -281,6 +283,17 @@ class Window(QMainWindow):
         self.poll=QTimer(self)
         self.poll.timeout.connect(self.refresh_exports)
         self.poll.start(300)
+
+    @Slot()
+    def configure_audio(self):
+        device=QMediaDevices.defaultAudioOutput()
+        if device.isNull():
+            self.player.setAudioOutput(None)
+        else:
+            if self.audio.device()!=device:
+                self.audio.setDevice(device)
+            if self.player.audioOutput() is not self.audio:
+                self.player.setAudioOutput(self.audio)
 
     def panel(self,title):
         widget=QWidget()
