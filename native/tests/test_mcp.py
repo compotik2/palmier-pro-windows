@@ -2,6 +2,8 @@ import json
 import urllib.request
 import urllib.error
 import unittest
+import tempfile
+from pathlib import Path
 from palmier.model import Editor
 from palmier.media import ExportQueue
 from palmier.mcp import MCPServer,Tools,SCHEMAS
@@ -67,6 +69,22 @@ class MCPTests(unittest.TestCase):
         result=self.call("create_timeline",dict(name="alternate"))
         self.assertFalse(result["isError"])
         self.assertNotEqual(before,self.e.doc["activeTimelineId"])
+
+    def test_save_project_writes_reopenable_project(self):
+        with tempfile.TemporaryDirectory() as root:
+            package=Path(root)/"saved.palmier"
+            response=self.call("save_project",dict(path=str(package)))
+            self.assertFalse(response["isError"])
+            reopened=Editor()
+            reopened.load(package)
+            self.assertEqual(reopened.snapshot(),self.e.snapshot())
+
+    def test_batch_track_removal_resolves_original_indices(self):
+        self.e.add_track("video")
+        third=self.e.add_track("video")
+        response=self.call("manage_tracks",dict(remove=[0,1]))
+        self.assertFalse(response["isError"])
+        self.assertEqual([tr["id"] for tr in self.e.timeline["tracks"]],[third])
 
 
 if __name__=="__main__":

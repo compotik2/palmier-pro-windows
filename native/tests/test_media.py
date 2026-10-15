@@ -185,6 +185,28 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(queue.list()[0]["status"],"cancelled")
         self.assertEqual(output.read_bytes(),b"keep")
 
+    def test_export_refuses_to_replace_source_media(self):
+        before=self.red.read_bytes()
+        with self.assertRaisesRegex(ValueError,"source media"):
+            render(self.e,self.e.timeline,self.red)
+        self.assertEqual(self.red.read_bytes(),before)
+
+    def test_no_overwrite_preserves_file_created_during_render(self):
+        output=self.root/"race.mp4"
+        queue=ExportQueue(self.e)
+        original=queue.patch
+        def competing_writer(job,**values):
+            if values.get("progress",0)>0 and not output.exists():
+                output.write_bytes(b"other writer")
+            original(job,**values)
+        queue.patch=competing_writer
+        queue.start(dict(outputPath=str(output),overwrite=False))
+        deadline=time.monotonic()+30
+        while time.monotonic()<deadline and queue.list()[0]["status"] in ("queued","running"):
+            time.sleep(.02)
+        self.assertEqual(queue.list()[0]["status"],"failed")
+        self.assertEqual(output.read_bytes(),b"other writer")
+
 
 if __name__=="__main__":
     unittest.main()

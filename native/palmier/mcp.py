@@ -31,6 +31,7 @@ N = dict(type="number")
 B = dict(type="boolean")
 STYLE = obj(dict(fontSize=dict(type="number", minimum=12, maximum=300), color=dict(type="string", pattern=r"^#[0-9a-fA-F]{6}$")))
 SCHEMAS = {
+    "save_project": obj(dict(path=S,collectMedia=B)),
     "manage_project": obj(dict(action=dict(enum=["list", "open", "create", "close"]), name=S, id=S, path=S, fps=I,
                                aspectRatio=dict(enum=["16:9", "9:16", "1:1", "4:3"]), quality=dict(enum=["720p", "1080p", "2K", "4K"])), ["action"]),
     "get_timeline": obj(dict(startFrame=I, endFrame=I, captionDetail=B)),
@@ -72,7 +73,7 @@ class Tools:
     def list(self):
         result = []
         for name, schema in SCHEMAS.items():
-            result.append(dict(name=name, description=("Windows extension. " if name.startswith("windows_") else "GPL Palmier tool name; supported Windows subset. ") +
+            result.append(dict(name=name, description=("Desktop extension, not an original GPL tool. " if name.startswith("windows_") or name=="save_project" else "GPL Palmier tool name; supported Windows subset. ") +
                                f"{name.replace('_',' ')}. Only properties in this schema are implemented; unsupported original modes fail without mutation.", inputSchema=schema))
         return result
 
@@ -86,6 +87,15 @@ class Tools:
         e = self.editor
         if name == "manage_project":
             return self.project(args)
+        if name == "save_project":
+            path=args.get("path")
+            if path is not None and not Path(path).is_absolute():
+                raise ValueError("path must be absolute")
+            saved=e.save(path,collect_media=args.get("collectMedia",False))
+            with e.lock:
+                return dict(path=saved,status="saved_snapshot" if e.dirty else "saved",dirty=e.dirty,collectedMedia=args.get("collectMedia",False))
+        if name == "export_project":
+            return self.exports.start(args)
         if name == "import_media":
             source = Path(args["source"]["path"])
             if not source.is_absolute():
@@ -190,8 +200,10 @@ class Tools:
                         if not values:
                             raise ValueError("No track properties specified")
                         tr.update(values)
-                    for item in args.get("remove", []):
-                        tr = select(dict(index=item) if type(item) is int else item)
+                    removing=[select(dict(index=item) if type(item) is int else item) for item in args.get("remove", [])]
+                    if len({tr["id"] for tr in removing})!=len(removing):
+                        raise ValueError("Duplicate track removal")
+                    for tr in removing:
                         e.timeline["tracks"].remove(tr)
                     return dict(status="updated")
                 return e.mutate("Manage tracks", action)
@@ -210,8 +222,6 @@ class Tools:
                 if set(args) != {"width", "height"}:
                     raise ValueError("Supply both width and height; frame-rate rescaling is not implemented")
                 return e.mutate("Canvas settings", lambda: e.timeline.update(args))
-            if name == "export_project":
-                return self.exports.start(args)
             if name == "manage_exports":
                 if args["action"] == "list":
                     return dict(exports=self.exports.list())

@@ -166,6 +166,95 @@ class EditorTests(unittest.TestCase):
                 self.e.load(target,expected_revision=old_revision)
             self.assertEqual(self.e.clip(cid)[1]["opacity"],.5)
 
+    def test_batch_swap_keeps_both_clips(self):
+        first=self.add(0,30)
+        second=self.add(30,60)
+        self.e.move([dict(clipId=first,toFrame=30),dict(clipId=second,toFrame=0)])
+        self.assertEqual(self.e.clip(first)[1]["startFrame"],30)
+        self.assertEqual(self.e.clip(second)[1]["startFrame"],0)
+
+    def test_split_clamps_surviving_fades(self):
+        cid=self.add()
+        self.e.properties([cid],dict(fadeInFrames=60,fadeOutFrames=30))
+        right=self.e.split([dict(clipId=cid,atFrame=30)])["newClipIds"][0]
+        self.assertLessEqual(self.e.clip(cid)[1]["fadeInFrames"],30)
+        self.assertLessEqual(self.e.clip(right)[1]["fadeOutFrames"],60)
+
+    def test_duration_extension_resolves_overlap(self):
+        first=self.add(0,30)
+        self.add(30,60)
+        self.e.properties([first],dict(durationFrames=45))
+        clips=sorted(self.e.timeline["tracks"][0]["clips"],key=lambda c:c["startFrame"])
+        self.assertEqual([(c["startFrame"],end(c)) for c in clips],[(0,45),(45,60)])
+
+    def test_text_batch_reuses_one_automatic_track(self):
+        before=len(self.e.timeline["tracks"])
+        self.e.add_texts([dict(startFrame=0,endFrame=30,content="One"),dict(startFrame=30,endFrame=60,content="Two")])
+        self.assertEqual(len(self.e.timeline["tracks"]),before+1)
+
+    def test_noop_move_preserves_history_and_order(self):
+        first=self.add(0,30)
+        self.add(30,60)
+        before=self.e.snapshot()
+        count=len(self.e.undo_stack)
+        self.e.move([dict(clipId=first,toFrame=0)])
+        self.assertEqual(self.e.snapshot(),before)
+        self.assertEqual(len(self.e.undo_stack),count)
+
+    def test_combined_inspector_move_does_not_erase_old_neighbors(self):
+        first=self.add(0,30)
+        second=self.add(30,60)
+        self.e.edit_clip(first,dict(durationFrames=60),start_frame=90)
+        self.assertEqual(self.e.clip(second)[1]["startFrame"],30)
+        self.assertEqual(self.e.clip(first)[1]["startFrame"],90)
+
+    def test_portable_save_copies_media_and_preserves_undo_resolution(self):
+        cid=self.add()
+        with tempfile.TemporaryDirectory() as root:
+            source=Path(root)/"source.mp4"
+            source.write_bytes(b"media-bytes")
+            self.e.manifest["entries"][0]["source"]={"external":{"absolutePath":str(source)}}
+            self.e.properties([cid],dict(opacity=.5))
+            package=Path(root)/"portable.palmier"
+            self.e.save(package,collect_media=True)
+            source.unlink()
+            self.assertEqual(self.e.media_path(self.e.media("a")).read_bytes(),b"media-bytes")
+            self.e.undo()
+            self.assertEqual(self.e.clip(cid)[1]["opacity"],1)
+            self.assertEqual(self.e.media_path(self.e.media("a")).read_bytes(),b"media-bytes")
+            reopened=Editor()
+            reopened.load(package)
+            self.assertEqual(reopened.media_path(reopened.media("a")).read_bytes(),b"media-bytes")
+
+    def test_portable_save_missing_media_does_not_replace_package(self):
+        self.add()
+        with tempfile.TemporaryDirectory() as root:
+            package=Path(root)/"keep.palmier"
+            self.e.save(package)
+            before=(package/"media.json").read_bytes()
+            with self.assertRaisesRegex(ValueError,"missing media"):
+                self.e.save(collect_media=True)
+            self.assertEqual((package/"media.json").read_bytes(),before)
+
+    def test_save_as_does_not_replace_directory_created_during_collection(self):
+        from unittest.mock import patch
+        import shutil
+        self.add()
+        with tempfile.TemporaryDirectory() as root:
+            source=Path(root)/"source.mp4"
+            source.write_bytes(b"source")
+            self.e.manifest["entries"][0]["source"]={"external":{"absolutePath":str(source)}}
+            destination=Path(root)/"race.palmier"
+            original=shutil.copy2
+            def competing_writer(*args,**kwargs):
+                destination.mkdir(exist_ok=True)
+                (destination/"user.txt").write_text("preserve",encoding="utf-8")
+                return original(*args,**kwargs)
+            with patch("palmier.model.shutil.copy2",side_effect=competing_writer):
+                with self.assertRaises(FileExistsError):
+                    self.e.save(destination,collect_media=True)
+            self.assertEqual((destination/"user.txt").read_text(),"preserve")
+
 
 if __name__=="__main__":
     unittest.main()

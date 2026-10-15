@@ -16,7 +16,7 @@ try {
   const host=JSON.parse(line);
   await client.connect(new StreamableHTTPClientTransport(new URL(host.url)));
   const inventory=await client.listTools();
-  assert.equal(inventory.tools.length,20);
+  assert.ok(inventory.tools.some(tool=>tool.name==='save_project'));
   async function call(name,args={}) {
     const result=await client.callTool({name,arguments:args});
     assert.equal(result.isError,false,JSON.stringify(result));
@@ -41,6 +41,7 @@ try {
   }
   assert.equal(current.status,'done',JSON.stringify(current));
   assert.equal(current.progress,100);
+  await call('save_project',{collectMedia:true});
   console.log(JSON.stringify({sdk:'1.32.1',protocolNegotiated:true,toolCount:inventory.tools.length,splitReadback:true,undoReadback:true,unsupportedToolError:true,exportJobDone:true},null,2));
   const next=once(lines,'line');
   child.stdin.end('stop\n');

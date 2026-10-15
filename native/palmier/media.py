@@ -189,9 +189,25 @@ def filter_graph(editor, timeline, work, resolution="Match Timeline"):
     return args, filters, visual, total
 
 
+def protect_source_media(editor,timeline,destination):
+    used={c["mediaRef"] for tr in timeline["tracks"] for c in tr["clips"]}
+    for entry in editor.manifest["entries"]:
+        if entry["id"] not in used:
+            continue
+        source=editor.media_path(entry).resolve()
+        same=os.path.normcase(str(source))==os.path.normcase(str(destination))
+        if not same and destination.exists() and source.exists():
+            same=destination.samefile(source)
+        if same:
+            raise ValueError("Export destination cannot replace source media")
+
+
 def render(editor, timeline, destination, codec="H.264", resolution="Match Timeline", bitrate=8,
-           hardware=False, cancel=None, progress=lambda p: None, frame=None):
+           hardware=False, cancel=None, progress=lambda p: None, frame=None, overwrite=True):
     destination = Path(destination).resolve()
+    protect_source_media(editor,timeline,destination)
+    if destination.exists() and not overwrite:
+        raise FileExistsError("Destination exists")
     if destination.suffix.lower() not in (".mp4", ".png"):
         raise ValueError("Use .mp4 export or .png frame destination")
     if codec not in ("H.264", "H.265"):
@@ -249,7 +265,13 @@ def render(editor, timeline, destination, codec="H.264", resolution="Match Timel
                 if cancel and cancel.is_set():
                     raise RuntimeError("Cancelled")
                 if code == 0:
-                    os.replace(temp, destination)
+                    if overwrite:
+                        os.replace(temp, destination)
+                    elif os.name=="nt":
+                        os.rename(temp,destination)
+                    else:
+                        os.link(temp,destination)
+                        temp.unlink()
                     progress(100)
                     return dict(path=str(destination), encoder=encoder, softwareFallback=bool(errors), warnings=errors)
                 errors.append(f"{encoder}: {error}")
@@ -291,10 +313,12 @@ class ExportQueue:
             raise ValueError("Unknown timelineId")
         if not duration(t):
             raise ValueError("Cannot export empty timeline")
+        destination=destination.resolve()
+        protect_source_media(snapshot,t,destination)
         job = dict(jobId=uid(), path=str(destination), filename=destination.name, status="queued", progress=0)
         cancel = threading.Event()
         with self.lock:
-            if any(j[0]["path"] == str(destination) and j[0]["status"] in ("queued", "running") for j in self.jobs.values()):
+            if any(os.path.normcase(j[0]["path"]) == os.path.normcase(str(destination)) and j[0]["status"] in ("queued", "running") for j in self.jobs.values()):
                 raise ValueError("Destination already has an active export")
             self.jobs[job["jobId"]] = (job, cancel)
         def work():
@@ -308,6 +332,7 @@ class ExportQueue:
                     result = render(snapshot, t, destination, codec=args.get("codec", "H.264"),
                                     resolution=args.get("resolution", "Match Timeline"), bitrate=args.get("bitrateMbps", 8),
                                     hardware=args.get("hardware", False), cancel=cancel,
+                                    overwrite=args.get("overwrite",True),
                                     progress=lambda p: self.patch(job, progress=p))
                     self.patch(job, status="done", progress=100, **result)
                 except Exception as e:

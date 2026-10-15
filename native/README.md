@@ -1,4 +1,4 @@
-# Palmier Pro — native Windows/Linux development port 0.3.0
+# Palmier Pro — native Windows/Linux development port 0.4.0
 
 **Linux:** see [LINUX.md](LINUX.md) for the x86_64 build, dependencies and launch
 instructions. Both platforms use the same native Qt editor and MCP tools.
@@ -57,6 +57,9 @@ another program occupies it and reports the bind error.
 7. File → Save (`Ctrl+S`) creates a `.palmier` directory package. File → Open
    selects that directory. Save As requires a new destination. Media files
    imported by absolute path remain external references.
+   **Save portable project** collects them into the package. Missing media
+   aborts collection without replacing an existing save. Canvas settings offers
+   portrait 9:16, landscape and square presets.
 8. Export (`Ctrl+E`) supports MP4 H.264/H.265, resolution, Mbps bitrate, optional
    NVIDIA NVENC attempt with software fallback. Progress runs asynchronously.
    Export uses a model snapshot; later edits do not alter an active job.
@@ -82,7 +85,11 @@ Implemented tool subsets reuse original names and argument names:
 `move_clips`, `remove_clips`, `split_clips`, `set_clip_properties`,
 `manage_tracks`, `add_texts`, `update_text`, `undo`, `create_timeline`,
 `set_active_timeline`, `set_project_settings`, `export_project`, `manage_exports`.
-Extensions: `windows_playback`, `windows_redo` (not original tools).
+Extensions: `windows_playback`, `windows_redo`, `save_project` (not original tools).
+Example portable save:
+```json
+{"name":"save_project","arguments":{"path":"C:\\Projects\\MyEdit.palmier","collectMedia":true}}
+```
 Only supported schema fields are advertised. This is **not all 50-tool parity**.
 Examples:
 
@@ -117,7 +124,7 @@ Import/export and project switching are excluded from in-app agent tool access.
 | H.264 / H.265, 720p–4K / Mbps | Implemented; representative codecs/resolutions tested as listed in verification report |
 | Hardware encoding | NVENC attempt plus controlled real-FFmpeg encoder-failure → software fallback tested; GPU success is host-dependent |
 | Project save/load | Original core JSON keys; unknown fields preserved; not exhaustive upstream round-trip certification |
-| Original MCP | 18 original-name subsets + 2 Windows extensions; no complete schema/behavior parity |
+| Original MCP | 18 original-name subsets + 3 desktop extensions; no complete schema/behavior parity |
 | BYOK OpenAI chat / external Codex | Adapter implemented; live provider/Codex session unverified |
 | Linked AV clips, ripple, multicam, nested sequences | Not ported |
 | Keyframes, effects, advanced transforms/crop, color/HDR | Not ported; unsupported rendering fails |
@@ -128,7 +135,7 @@ Import/export and project switching are excluded from in-app agent tool access.
 | Windows 10 and Windows 11 separately certified | No; only the actual build host was executed |
 
 Known limitations also include one active desktop project, single-thumbnail
-filmstrips rather than position-specific thumbnails, no autosave, no collected-media export, in-memory export job
+filmstrips rather than position-specific thumbnails, no autosave, in-memory export job
 history, no media-relink UI, and constrained basic text styling. Do not edit
 unsupported original linked/effected projects as if full compatibility exists.
 
@@ -157,7 +164,7 @@ npm test
 
 Or use `powershell -ExecutionPolicy Bypass -File .\build.ps1` for tests, build,
 and packaged startup. Output: `dist/PalmierProWindows/PalmierProWindows.exe`
-and `dist/PalmierProWindows-0.3.0-win-x64-portable.zip` plus SHA256SUMS.
+and `dist/PalmierProWindows-0.4.0-win-x64-portable.zip` plus SHA256SUMS.
 Dependencies are pinned; builds are reproducible in procedure, not asserted
 byte-identical. `.github/workflows/native-windows.yml` builds on Windows runners.
 

@@ -1,4 +1,4 @@
-# Palmier Pro Linux 0.3.0 — native development port
+# Palmier Pro Linux 0.4.0 — native development port
 
 Native Qt 6 Widgets application using the same project model, timeline editor,
 FFmpeg render/export pipeline and local MCP server as the Windows build.
@@ -23,7 +23,7 @@ libraries. FFmpeg/FFprobe command-line executables remain external.
 ```bash
 sudo apt-get update
 sudo apt-get install ffmpeg fonts-liberation fonts-dejavu-core libegl1 libopengl0 libgl1 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0
-tar -xzf PalmierProLinux-0.3.0-linux-x86_64-portable.tar.gz
+tar -xzf PalmierProLinux-0.4.0-linux-x86_64-portable.tar.gz
 cd PalmierProLinux
 ./PalmierProLinux
 ```
@@ -81,7 +81,7 @@ python3.11 -m venv .venv
 ```
 
 Output: `dist/PalmierProLinux/PalmierProLinux` and
-`dist/PalmierProLinux-0.3.0-linux-x86_64-portable.tar.gz` with SHA256SUMS.
+`dist/PalmierProLinux-0.4.0-linux-x86_64-portable.tar.gz` with SHA256SUMS.
 `bash build.sh` runs tests, packaging and the desktop/media check in an existing
 graphical session. Node.js 24 is optional for `mcp-client` SDK verification.
 

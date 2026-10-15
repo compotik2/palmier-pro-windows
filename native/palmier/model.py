@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import math
 import os
@@ -39,6 +40,16 @@ def end(clip):
     return clip["startFrame"] + clip["durationFrames"]
 
 
+def fit_fades(clip):
+    inside=max(0,clip.get("fadeInFrames",0))
+    outside=max(0,clip.get("fadeOutFrames",0))
+    duration=clip["durationFrames"]
+    if inside+outside>duration:
+        inside=round(inside*duration/(inside+outside))
+        outside=duration-inside
+    clip["fadeInFrames"],clip["fadeOutFrames"]=inside,outside
+
+
 def clip_defaults(kind, ref, start, duration, trim=0):
     return dict(id=uid(), mediaRef=ref, mediaType=kind, sourceClipType=kind,
                 startFrame=start, durationFrames=duration, trimStartFrame=trim,
@@ -76,10 +87,19 @@ def validate_project(doc, manifest):
                 number(c.get("speed", 1), "speed", .05, 16)
                 number(c.get("volume", 1), "volume", 0, 6)
                 number(c.get("opacity", 1), "opacity", 0, 1)
+                for key in ("fadeInFrames","fadeOutFrames"):
+                    integer(c.get(key,0),key)
+                if c.get("fadeInFrames",0)+c.get("fadeOutFrames",0)>c["durationFrames"]:
+                    raise ValueError("Fades exceed clip duration")
     if doc.get("activeTimelineId") not in {t["id"] for t in doc["timelines"]}:
         raise ValueError("activeTimelineId does not identify a timeline")
     if not isinstance(manifest.get("entries"), list):
         raise ValueError("media.json must contain entries")
+    if any(not isinstance(entry,dict) for entry in manifest["entries"]):
+        raise ValueError("Media entries must be objects")
+    media_ids=[entry.get("id") for entry in manifest["entries"]]
+    if any(not isinstance(mid,str) or not mid for mid in media_ids) or len(set(media_ids))!=len(media_ids):
+        raise ValueError("Media IDs must be nonempty and unique")
 
 
 class Editor:
@@ -188,13 +208,15 @@ class Editor:
             self.revision += 1
         self.changed()
 
-    def save(self, destination=None):
+    def save(self, destination=None, collect_media=False):
         with self.io_lock:
             with self.lock:
                 old_package = self.package
                 doc, manifest = self.snapshot()
                 revision = self.revision
                 document_id = doc["timelines"][0]["id"]
+                original_sources={m["id"]:copy.deepcopy(m.get("source")) for m in manifest["entries"]}
+            validate_project(doc,manifest)
             target = Path(destination or old_package or "").resolve()
             if not str(target).lower().endswith(".palmier"):
                 raise ValueError("Choose a .palmier directory")
@@ -207,7 +229,25 @@ class Editor:
                 if target.exists():
                     shutil.copytree(target, stage, dirs_exist_ok=True)
                 for entry in manifest["entries"]:
-                    if "project" in entry.get("source", {}) and old_package != target:
+                    if collect_media:
+                        source_info=entry.get("source",{})
+                        if "external" in source_info:
+                            source=Path(source_info["external"]["absolutePath"]).resolve()
+                        elif "project" in source_info and old_package:
+                            source=(old_package/source_info["project"]["relativePath"]).resolve()
+                            if not source.is_relative_to(old_package.resolve()):
+                                raise ValueError("Media path escapes project package")
+                        else:
+                            raise ValueError("Cannot collect unresolved media: "+entry["id"])
+                        if not source.is_file():
+                            raise ValueError("Cannot collect missing media: "+str(source))
+                        name=hashlib.sha256(entry["id"].encode()).hexdigest()[:24]+source.suffix.lower()
+                        relative="media/"+name
+                        dest=stage/relative
+                        dest.parent.mkdir(parents=True,exist_ok=True)
+                        shutil.copy2(source,dest)
+                        entry["source"]={"project":{"relativePath":relative}}
+                    elif "project" in entry.get("source", {}) and old_package != target:
                         if not old_package:
                             raise ValueError("Project-relative media has no original package")
                         relative = entry["source"]["project"]["relativePath"]
@@ -227,6 +267,8 @@ class Editor:
                 with self.lock:
                     if self.doc["timelines"][0]["id"] != document_id:
                         raise ValueError("Save cancelled: active project changed during file work")
+                    if target.exists() and target!=old_package:
+                        raise FileExistsError("Save As destination appeared during file work; existing directory preserved")
                     if target.exists():
                         os.replace(target, backup)
                     try:
@@ -237,6 +279,16 @@ class Editor:
                         raise
                     self.package, self.name = target, target.stem
                     self.dirty = self.revision != revision
+                    if collect_media:
+                        collected={m["id"]:m["source"] for m in manifest["entries"]}
+                        for current in self.manifest["entries"]:
+                            if current["id"] in collected and current.get("source")==original_sources[current["id"]]:
+                                current["source"]=copy.deepcopy(collected[current["id"]])
+                        for stack in (self.undo_stack,self.redo_stack):
+                            for _,(_,saved_manifest) in stack:
+                                for current in saved_manifest["entries"]:
+                                    if current["id"] in collected and current.get("source")==original_sources[current["id"]]:
+                                        current["source"]=copy.deepcopy(collected[current["id"]])
                 if backup.exists():
                     shutil.rmtree(backup)
             finally:
@@ -290,19 +342,25 @@ class Editor:
                 left = copy.deepcopy(c)
                 left["durationFrames"] = start - c["startFrame"]
                 left["fadeOutFrames"] = 0
+                fit_fades(left)
                 output.append(left)
             if original_end > finish:
                 right = copy.deepcopy(c)
-                right["id"] = uid()
+                if c["startFrame"] < start:
+                    right["id"] = uid()
                 right["trimStartFrame"] += round((finish - c["startFrame"]) * c.get("speed", 1))
                 right["startFrame"], right["durationFrames"] = finish, original_end - finish
                 right["fadeInFrames"] = 0
+                fit_fades(right)
                 output.append(right)
         track["clips"] = output
 
     def add_clips(self, entries):
         if not entries:
             raise ValueError("entries must not be empty")
+        indexed=["trackIndex" in entry for entry in entries]
+        if any(indexed) and not all(indexed):
+            raise ValueError("Specify trackIndex on every entry or omit it on every entry")
         def action():
             result = []
             default_tracks = {}
@@ -352,7 +410,11 @@ class Editor:
             raise ValueError("moves must not be empty")
         def action():
             targets = []
+            seen=set()
             for m in moves:
+                if m["clipId"] in seen:
+                    raise ValueError("Duplicate clipId in move batch")
+                seen.add(m["clipId"])
                 if "toFrame" not in m and "toTrack" not in m:
                     raise ValueError("Specify toFrame or toTrack")
                 tr, c = self.clip(m["clipId"])
@@ -364,8 +426,15 @@ class Editor:
                 if tr["type"] != dest["type"]:
                     raise ValueError("Cannot move across video/audio zones")
                 targets.append((tr, c, dest, integer(m.get("toFrame", c["startFrame"]), "toFrame")))
-            for tr, c, dest, frame in targets:
+            if all(tr is dest and frame==c["startFrame"] for tr,c,dest,frame in targets):
+                return dict(clipIds=list(seen),unchanged=True)
+            for i,(_,a,ta,fa) in enumerate(targets):
+                for _,b,tb,fb in targets[i+1:]:
+                    if ta is tb and fa<fb+b["durationFrames"] and fb<fa+a["durationFrames"]:
+                        raise ValueError("Moved clips overlap one another at their destination")
+            for tr,c,_,_ in targets:
                 tr["clips"].remove(c)
+            for tr, c, dest, frame in targets:
                 c["startFrame"] = frame
                 self.overwrite(dest, frame, end(c))
                 dest["clips"].append(c)
@@ -389,6 +458,8 @@ class Editor:
                 right["trimStartFrame"] += round(offset * c.get("speed", 1))
                 right["fadeInFrames"] = 0
                 c["durationFrames"], c["fadeOutFrames"] = offset, 0
+                fit_fades(c)
+                fit_fades(right)
                 tr["clips"].append(right)
                 result.append(right["id"])
             return dict(newClipIds=result)
@@ -407,8 +478,10 @@ class Editor:
         if not ids or not values or set(values) - allowed:
             raise ValueError("Unsupported or missing clip properties")
         def action():
+            targets=[]
             for cid in ids:
-                _, c = self.clip(cid)
+                tr, c = self.clip(cid)
+                targets.append((tr,c))
                 for k, v in values.items():
                     if k == "volumeDb":
                         c["volume"] = 10 ** (number(v, k, -60, 15) / 20)
@@ -426,12 +499,45 @@ class Editor:
                 m = self.media(c["mediaRef"])
                 if m and m["type"] not in ("image", "text") and c["trimStartFrame"] + round(c["durationFrames"] * c["speed"]) + c.get("trimEndFrame", 0) > round(m["duration"] * self.timeline["fps"]):
                     raise ValueError("Clip exceeds available media; shorten duration with trim")
+            if {"durationFrames","speed"}&set(values):
+                for i,(tr,a) in enumerate(targets):
+                    for other,b in targets[i+1:]:
+                        if tr is other and a["startFrame"]<end(b) and b["startFrame"]<end(a):
+                            raise ValueError("Edited target clips overlap one another")
+                for tr,c in targets:
+                    self.overwrite(tr,c["startFrame"],end(c),ignore=c["id"])
             return dict(clipIds=ids)
         return self.mutate("Clip properties", action)
 
+    def edit_clip(self,cid,values,start_frame=None):
+        def action():
+            _,c=self.clip(cid)
+            if start_frame is not None:
+                c["startFrame"]=integer(start_frame,"startFrame")
+            return self.properties([cid],values)
+        return self.mutate("Edit clip",action)
+
+    def trim(self,cid,start_frame=None,end_frame=None):
+        def action():
+            _,c=self.clip(cid)
+            start=integer(c["startFrame"] if start_frame is None else start_frame,"startFrame")
+            finish=integer(end(c) if end_frame is None else end_frame,"endFrame")
+            length=integer(finish-start,"durationFrames",1)
+            source=integer(c.get("trimStartFrame",0)+round((start-c["startFrame"])*c.get("speed",1)),"trimStartFrame")
+            draft=copy.deepcopy(c)
+            draft["durationFrames"]=length
+            fit_fades(draft)
+            return self.edit_clip(cid,dict(durationFrames=length,trimStartFrame=source,
+                                         fadeInFrames=draft["fadeInFrames"],fadeOutFrames=draft["fadeOutFrames"]),start)
+        return self.mutate("Trim clip",action)
+
     def add_texts(self, entries):
+        indexed=["trackIndex" in entry for entry in entries]
+        if any(indexed) and not all(indexed):
+            raise ValueError("Specify trackIndex on every text or omit it on every text")
         def action():
             ids = []
+            automatic=None
             for e in entries:
                 if set(e) - {"startFrame", "endFrame", "content", "trackIndex", "style"}:
                     raise ValueError("Text animation/transform is not implemented")
@@ -450,8 +556,10 @@ class Editor:
                     raise ValueError("Text color must be #RRGGBB")
                 index = e.get("trackIndex")
                 if index is None:
-                    self.timeline["tracks"].insert(0, new_track("video", "Text"))
-                    index = 0
+                    if automatic is None:
+                        self.timeline["tracks"].insert(0, new_track("video", "Text"))
+                        automatic=0
+                    index=automatic
                 if type(index) is not int or not 0 <= index < len(self.timeline["tracks"]) or self.timeline["tracks"][index]["type"] == "audio":
                     raise ValueError("Text requires a visual track")
                 c = clip_defaults("text", uid(), start, duration)

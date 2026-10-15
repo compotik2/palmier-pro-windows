@@ -195,12 +195,9 @@ class Timeline(QAbstractScrollArea):
                 if mode=="move":
                     self.editor.move([dict(clipId=c["id"],toFrame=start,toTrack=row)])
                 elif mode=="right":
-                    self.editor.properties([c["id"]],dict(durationFrames=length))
+                    self.editor.trim(c["id"],end_frame=start+length)
                 else:
-                    def trim():
-                        self.editor.properties([c["id"]],dict(durationFrames=length,trimStartFrame=c.get("trimStartFrame",0)+round((start-c["startFrame"])*c.get("speed",1))))
-                        self.editor.move([dict(clipId=c["id"],toFrame=start)])
-                    self.editor.mutate("Trim start",trim)
+                    self.editor.trim(c["id"],start_frame=start,end_frame=start+length)
             self.window().act(edit)
         self.drag=self.ghost=None
         self.refresh()
@@ -416,6 +413,10 @@ class Window(QMainWindow):
         self.progress.setMaximumWidth(200)
         self.progress.hide()
         self.statusBar().addPermanentWidget(self.progress)
+        self.cancel_export=QPushButton("Cancel export")
+        self.cancel_export.hide()
+        self.cancel_export.clicked.connect(self.cancel_active_export)
+        self.statusBar().addPermanentWidget(self.cancel_export)
         self.setAcceptDrops(True)
 
     def build_menu(self):
@@ -433,6 +434,9 @@ class Window(QMainWindow):
             action(file,label,key,call)
         for label,key,call in [("Undo","Ctrl+Z",lambda:self.act(self.editor.undo)),("Redo","Ctrl+Shift+Z",lambda:self.act(lambda:self.editor.undo(True))),("Split at playhead","Ctrl+K",self.split_selected),("Delete clip","Delete",self.delete_selected),("Cut clip","Ctrl+X",self.cut_selected),("Copy clip","Ctrl+C",self.copy_selected),("Paste clip","Ctrl+V",self.paste_selected)]:
             action(edit,label,key,call)
+        action(edit,"Redo (Windows shortcut)","Ctrl+Y",lambda:self.act(lambda:self.editor.undo(True)))
+        action(file,"Save portable project…",None,lambda:self.save_project(True,True))
+        action(file,"Canvas settings…",None,self.canvas_dialog)
         action(playback,"Play / Pause","Space",self.toggle_play)
         action(help_menu,"MCP connection instructions",None,lambda:QMessageBox.information(self,"MCP",self.connection.text()+"\n\nOpenCode: add mcp.palmier-pro with type remote, url http://127.0.0.1:19789/mcp and enabled true in ~/.config/opencode/opencode.jsonc; restart OpenCode.\n\ncodex mcp add palmier-pro --url http://127.0.0.1:19789/mcp\n\nOnly implemented tool subsets are advertised. Loopback only; browser origins refused. Optional PALMIER_MCP_TOKEN requires a Bearer header."))
         action(help_menu,"About / License",None,lambda:QMessageBox.information(self,desktop_name(),f"GPLv3 development port · {VERSION}\nBased on Palmier, Inc. last-gpl-source.\nNative Qt 6 / FFmpeg. Not feature-complete or pixel-perfect.\nSee README, LICENSE and third-party notices."))
@@ -535,10 +539,7 @@ class Window(QMainWindow):
         if not self.selected_id:
             return
         def edit():
-            def action():
-                self.editor.properties([self.selected_id],{k:f.value() for k,f in self.fields.items() if k!="startFrame"})
-                self.editor.move([dict(clipId=self.selected_id,toFrame=self.fields["startFrame"].value())])
-            self.editor.mutate("Inspector edit",action)
+            self.editor.edit_clip(self.selected_id,{k:f.value() for k,f in self.fields.items() if k!="startFrame"},self.fields["startFrame"].value())
         self.act(edit)
 
     def set_zoom(self,value):
@@ -586,10 +587,9 @@ class Window(QMainWindow):
             if not c["startFrame"]<f<end(c):
                 raise ValueError("Playhead must be inside selected clip")
             if left:
-                self.editor.properties([c["id"]],dict(durationFrames=end(c)-f,trimStartFrame=c.get("trimStartFrame",0)+round((f-c["startFrame"])*c.get("speed",1))))
-                self.editor.move([dict(clipId=c["id"],toFrame=f)])
+                self.editor.trim(c["id"],start_frame=f)
             else:
-                self.editor.properties([c["id"]],dict(durationFrames=f-c["startFrame"]))
+                self.editor.trim(c["id"],end_frame=f)
         self.act(lambda:self.editor.mutate("Trim to playhead",action))
 
     def add_text(self):
@@ -766,19 +766,55 @@ class Window(QMainWindow):
             if file:
                 self.act(lambda:self.exports.start(dict(outputPath=file,codec=codec.currentText(),resolution=resolution.currentText(),bitrateMbps=bitrate.value(),hardware=hardware.isChecked())))
 
+    def canvas_dialog(self):
+        dialog=QDialog(self)
+        dialog.setWindowTitle("Canvas settings")
+        layout=QFormLayout(dialog)
+        presets=QComboBox()
+        sizes=[("Current",self.editor.timeline["width"],self.editor.timeline["height"]),
+               ("Portrait 9:16 · 1080p",1080,1920),("Landscape 16:9 · 1080p",1920,1080),
+               ("Square 1:1 · 1080p",1080,1080),("Portrait 9:16 · 720p",720,1280)]
+        presets.addItems([name for name,_,_ in sizes])
+        width,height=QSpinBox(),QSpinBox()
+        for widget,value in [(width,sizes[0][1]),(height,sizes[0][2])]:
+            widget.setRange(2,7680)
+            widget.setSingleStep(2)
+            widget.setValue(value)
+        def preset(index):
+            width.setValue(sizes[index][1])
+            height.setValue(sizes[index][2])
+        presets.currentIndexChanged.connect(preset)
+        layout.addRow("Preset",presets)
+        layout.addRow("Width",width)
+        layout.addRow("Height",height)
+        layout.addRow("Frame rate",QLabel(str(self.editor.timeline["fps"])+" fps"))
+        buttons=QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+        if dialog.exec():
+            self.act(lambda:self.tools.call("set_project_settings",dict(width=width.value(),height=height.value())))
+
     def refresh_exports(self):
         jobs=self.exports.list()
         active=next((j for j in jobs if j["status"] in ("queued","running")),None)
         if active:
             self.progress.show()
+            self.cancel_export.show()
+            self.active_export_id=active["jobId"]
             self.progress.setValue(active["progress"])
             self.progress.setFormat(active["status"]+" %p%")
         elif jobs:
             self.progress.hide()
+            self.cancel_export.hide()
             latest=jobs[-1]
             if getattr(self,"reported_job",None)!=(latest["jobId"],latest["status"]):
                 self.reported_job=(latest["jobId"],latest["status"])
                 self.statusBar().showMessage("Export "+latest["status"]+": "+latest.get("error",latest["path"]),20000)
+
+    def cancel_active_export(self):
+        if getattr(self,"active_export_id",None):
+            self.act(lambda:self.exports.cancel(self.active_export_id))
 
     def confirm_discard(self):
         if not self.editor.dirty:
@@ -802,7 +838,7 @@ class Window(QMainWindow):
             revision=self.editor.revision
             self.task(lambda:self.editor.load(file, expected_revision=revision),lambda result,error:self.act(lambda:(_ for _ in ()).throw(error)) if error else self.seek(0))
 
-    def save_project(self,save_as=False):
+    def save_project(self,save_as=False,collect_media=False):
         target=None
         if save_as or not self.editor.package:
             target,_=QFileDialog.getSaveFileName(self,"Save project",str(Path.home()/(self.editor.name+".palmier")),"Palmier package (*.palmier)")
@@ -810,7 +846,7 @@ class Window(QMainWindow):
                 return
             if not target.endswith(".palmier"):
                 target+=".palmier"
-        self.task(lambda:self.editor.save(target),lambda result,error:self.act(lambda:(_ for _ in ()).throw(error)) if error else self.statusBar().showMessage("Saved "+result))
+        self.task(lambda:self.editor.save(target,collect_media=collect_media),lambda result,error:self.act(lambda:(_ for _ in ()).throw(error)) if error else self.statusBar().showMessage("Saved "+result))
 
     def send_chat(self):
         prompt=self.chat_input.text().strip()
